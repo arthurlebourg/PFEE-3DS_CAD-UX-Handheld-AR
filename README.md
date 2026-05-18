@@ -28,11 +28,11 @@ VITE v5.x.x  ready in 400 ms
 ```
 
 
-## Connecting your Headset
+## Connecting your Smartphone
 
 Look for the Network URL in your terminal (e.g., https://192.168.1.25:5173).
 
-Put on your VR headset and open the Browser (Oculus Browser, Wolvic, etc.).
+Open the Chrome Browser.
 
 Type the Network URL exactly as it appears (don't forget the s in https).
 
@@ -42,7 +42,7 @@ SSL Warning: Since we use a self-signed certificate, the browser will show a war
 
     Click Proceed to 192.168.1.XX (unsafe).
 
-Click the "Enter VR" button at the bottom of the page.
+Click the "Enter AR" button at the bottom of the page.
 
 ## Use the emulator
 
