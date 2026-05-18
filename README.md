@@ -8,7 +8,7 @@ This project is a Three.js template using TypeScript and Vite, configured for We
 
 ### 1. Prerequisites
 - **Node.js**: Ensure you have Node.js installed (v20.19.0+ or v22+ recommended).
-- **Network**: Your VR headset and your computer must be on the **same Wi-Fi network**.
+- **Network**: Your Smartphone and your computer must be on the **same Wi-Fi network**.
 
 ### 2. Installation
 ```bash
