@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
+import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 
 const scene = new THREE.Scene();
 
@@ -13,7 +13,7 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
 
-document.body.appendChild(VRButton.createButton(renderer));
+document.body.appendChild(ARButton.createButton(renderer));
 
 const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
 const material = new THREE.MeshNormalMaterial();
