@@ -12,12 +12,15 @@ let renderer: THREE.WebGLRenderer;
 let controller1: THREE.XRTargetRaySpace;
 let controller2: THREE.XRTargetRaySpace;
 
-let reticle: THREE.Mesh;
-
 let ferrariModel: THREE.Object3D | null = null;
+let previewModel: THREE.Object3D | null = null;
 
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
+
+// Matrix applied on top of the hit pose to scale the placed/preview model down.
+const PLACEMENT_SCALE = 0.05;
+const scaleMatrix = new THREE.Matrix4().makeScale(PLACEMENT_SCALE, PLACEMENT_SCALE, PLACEMENT_SCALE);
 
 init();
 
@@ -46,13 +49,15 @@ function init(): void {
     const loader = new GLTFLoader();
     loader.load(ferrariUrl, (gltf) => {
         ferrariModel = gltf.scene;
+        previewModel = createPreview(ferrariModel);
+        scene.add(previewModel);
     });
 
     function onSelect(): void {
-        if (reticle.visible && ferrariModel) {
+        if (previewModel?.visible && ferrariModel) {
             const model = ferrariModel.clone();
-            reticle.matrix.decompose(model.position, model.quaternion, model.scale);
-            model.scale.multiplyScalar(0.05);
+            // previewModel.matrix already bakes in the placement scale, so reuse it directly.
+            previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
             scene.add(model);
         }
     }
@@ -65,15 +70,38 @@ function init(): void {
     controller2.addEventListener('select', onSelect);
     scene.add(controller2);
 
-    reticle = new THREE.Mesh(
-        new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial(),
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    scene.add(reticle);
-
     window.addEventListener('resize', onWindowResize);
+}
+
+// Builds a translucent "ghost" of the model to preview the placement spot.
+// Cloned once and reused every frame to avoid per-frame allocations.
+function createPreview(source: THREE.Object3D): THREE.Object3D {
+    const preview = source.clone();
+
+    preview.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) {
+            return;
+        }
+
+        // Clone materials so the translucency doesn't leak onto placed cars,
+        // which keep sharing the original opaque materials.
+        const makeGhost = (material: THREE.Material): THREE.Material => {
+            const ghost = material.clone();
+            ghost.transparent = true;
+            ghost.opacity = 0.4;
+            ghost.depthWrite = true;
+            return ghost;
+        };
+
+        const material = child.material as THREE.Material | THREE.Material[];
+        child.material = Array.isArray(material) ? material.map(makeGhost) : makeGhost(material);
+    });
+
+    // Driven manually from the hit-test pose each frame.
+    preview.matrixAutoUpdate = false;
+    preview.visible = false;
+
+    return preview;
 }
 
 function onWindowResize(): void {
@@ -103,7 +131,7 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             hitTestSourceRequested = true;
         }
 
-        if (hitTestSource && referenceSpace) {
+        if (hitTestSource && referenceSpace && previewModel) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
 
             if (hitTestResults.length > 0) {
@@ -111,11 +139,13 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                 const pose = hit.getPose(referenceSpace);
 
                 if (pose) {
-                    reticle.visible = true;
-                    reticle.matrix.fromArray(pose.transform.matrix);
+                    previewModel.visible = true;
+                    previewModel.matrix
+                        .fromArray(pose.transform.matrix)
+                        .multiply(scaleMatrix);
                 }
             } else {
-                reticle.visible = false;
+                previewModel.visible = false;
             }
         }
     }
