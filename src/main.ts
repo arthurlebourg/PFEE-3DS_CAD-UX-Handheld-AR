@@ -5,6 +5,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
+import { PerfProbe } from './perf.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -30,6 +31,7 @@ let hitTestSourceRequested = false;
 
 let uiManager: UIManager;
 let pickHelper: PickHelper;
+let perf: PerfProbe;
 
 init();
 
@@ -65,7 +67,9 @@ function init(): void {
 
     // Helpers
     pickHelper = new PickHelper();
-    
+    perf = new PerfProbe({ visible: false });
+    perf.mount(document.body);
+
     uiManager = new UIManager(
         (isPlacement) => {
             if (!isPlacement && previewModel) {
@@ -91,8 +95,18 @@ function init(): void {
     document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
 
     // XREvents
-    renderer.xr.addEventListener('sessionstart', () => uiManager.toggleVisibility(true));
-    renderer.xr.addEventListener('sessionend', () => uiManager.toggleVisibility(false));
+    renderer.xr.addEventListener('sessionstart', () => {
+        uiManager.toggleVisibility(true);
+        perf.setVisible(true);
+        const session = renderer.xr.getSession();
+        if (session?.frameRate) {
+            perf.setTargetHz(session.frameRate);
+        }
+    });
+    renderer.xr.addEventListener('sessionend', () => {
+        uiManager.toggleVisibility(false);
+        perf.setVisible(false);
+    });
 
 
     if (availableModels.length > 0) {
@@ -147,7 +161,7 @@ function loadModel(modelName: string): void {
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
-    const pickedMesh = pickHelper.pickXR(inputSource, renderer);
+    const pickedMesh = pickHelper.pickXR(inputSource, renderer, perf);
 
     if (pickedMesh) {
         pickHelper.handleMeshSelection(pickedMesh, camera);
@@ -220,6 +234,8 @@ function onWindowResize(): void {
  * Handles AR hit testing, moving parts, and rendering the final scene.
  */
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
+    perf.frame(_timestamp);
+
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();

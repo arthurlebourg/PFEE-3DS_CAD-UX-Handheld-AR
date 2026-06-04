@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { PerfProbe } from './perf.js';
 
 interface AttachedPart {
     mesh: THREE.Mesh;
@@ -116,23 +117,13 @@ export class PickHelper {
     /**
      * Renders the picking scene and reads the pixel color at the specified coordinates to identify the clicked mesh.
      */
-    public pickXR(inputSource: XRInputSource | undefined, renderer: THREE.WebGLRenderer): THREE.Mesh | null {
+    public pickXR(inputSource: XRInputSource | undefined, renderer: THREE.WebGLRenderer, probe?: PerfProbe): THREE.Mesh | null {
         const axes = inputSource?.gamepad?.axes;
         if (inputSource?.targetRayMode !== 'screen' || !axes || axes.length < 2) {
             return null;
         }
         const ndcX = axes[0];
         const ndcY = axes[1];
-
-        const xrCamera = renderer.xr.getCamera();
-        const view = xrCamera.cameras[0] ?? xrCamera;
-        
-        this.pickCamera.matrixAutoUpdate = false;
-        this.pickCamera.matrixWorldAutoUpdate = false;
-        this.pickCamera.matrixWorld.copy(view.matrixWorld);
-        this.pickCamera.matrixWorldInverse.copy(view.matrixWorldInverse);
-        this.pickCamera.projectionMatrix.copy(view.projectionMatrix);
-        this.pickCamera.projectionMatrixInverse.copy(view.projectionMatrixInverse);
 
         const px = Math.floor((ndcX * 0.5 + 0.5) * this.pickingTexture.width);
         const py = Math.floor((0.5 - ndcY * 0.5) * this.pickingTexture.height);
@@ -141,29 +132,43 @@ export class PickHelper {
             return null;
         }
 
+        probe?.beginPick(this.pickingTexture.width, this.pickingTexture.height);
+
+        const xrCamera = renderer.xr.getCamera();
+        const view = xrCamera.cameras[0] ?? xrCamera;
+
+        this.pickCamera.matrixAutoUpdate = false;
+        this.pickCamera.matrixWorldAutoUpdate = false;
+        this.pickCamera.matrixWorld.copy(view.matrixWorld);
+        this.pickCamera.matrixWorldInverse.copy(view.matrixWorldInverse);
+        this.pickCamera.projectionMatrix.copy(view.projectionMatrix);
+        this.pickCamera.projectionMatrixInverse.copy(view.projectionMatrixInverse);
+
         const oldToneMapping = renderer.toneMapping;
         renderer.toneMapping = THREE.NoToneMapping;
-        
+
         const xrWasEnabled = renderer.xr.enabled;
         renderer.xr.enabled = false;
-        
+
         renderer.setRenderTarget(this.pickingTexture);
         renderer.clear();
+        probe?.split('prep');
+
         renderer.render(this.pickingScene, this.pickCamera);
+        probe?.split('render');
 
         const pixelBuffer = new Uint8Array(4);
         renderer.readRenderTargetPixels(this.pickingTexture, px, py, 1, 1, pixelBuffer);
-        
+        probe?.split('readback');
+
         renderer.setRenderTarget(null);
         renderer.xr.enabled = xrWasEnabled;
         renderer.toneMapping = oldToneMapping;
 
         const id = (pixelBuffer[0] << 16) | (pixelBuffer[1] << 8) | pixelBuffer[2];
-        
-        if (id > 0) {
-            return this.idToMeshMap.get(id) || null;
-        }
-        return null;
+        const pickedMesh = id > 0 ? (this.idToMeshMap.get(id) ?? null) : null;
+        probe?.endPick(pickedMesh !== null);
+        return pickedMesh;
     }
 
     /**
