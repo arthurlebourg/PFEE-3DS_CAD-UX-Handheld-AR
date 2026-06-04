@@ -81,6 +81,9 @@ function init(): void {
         (modelName) => {
             loadModel(modelName);
         },
+        (showPerf) => {
+            perf.setVisible(showPerf);
+        },
         availableModels
     );
     
@@ -97,7 +100,6 @@ function init(): void {
     // XREvents
     renderer.xr.addEventListener('sessionstart', () => {
         uiManager.toggleVisibility(true);
-        perf.setVisible(true);
         const session = renderer.xr.getSession();
         if (session?.frameRate) {
             perf.setTargetHz(session.frameRate);
