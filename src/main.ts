@@ -3,8 +3,18 @@ import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-const ferrariUrl = new URL('../assets/ferrari_f40.glb', import.meta.url).href;
+import { UIManager } from './ui.js';
+import { PickHelper } from './picking.js';
 
+const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
+const modelUrls: Record<string, string> = {};
+for (const path in modules) {
+    const filename = path.split('/').pop()!;
+    modelUrls[filename] = modules[path] as string;
+}
+const availableModels = Object.keys(modelUrls);
+
+let currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
 let container: HTMLDivElement;
 let camera: THREE.PerspectiveCamera;
 let scene: THREE.Scene;
@@ -12,24 +22,25 @@ let renderer: THREE.WebGLRenderer;
 let controller1: THREE.XRTargetRaySpace;
 let controller2: THREE.XRTargetRaySpace;
 
-let ferrariModel: THREE.Object3D | null = null;
+let loadedModel: THREE.Object3D | null = null;
 let previewModel: THREE.Object3D | null = null;
 
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
 
-// Matrix applied on top of the hit pose to scale the placed/preview model down.
-const PLACEMENT_SCALE = 0.05;
-const scaleMatrix = new THREE.Matrix4().makeScale(PLACEMENT_SCALE, PLACEMENT_SCALE, PLACEMENT_SCALE);
+let uiManager: UIManager;
+let pickHelper: PickHelper;
 
 init();
 
+/**
+ * Initializes the Three.js scene, WebXR session, lights, and loads the 3D model.
+ */
 function init(): void {
     container = document.createElement('div');
     document.body.appendChild(container);
 
     scene = new THREE.Scene();
-
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -44,73 +55,170 @@ function init(): void {
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
 
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
-
-    const loader = new GLTFLoader();
-    loader.load(ferrariUrl, (gltf) => {
-        ferrariModel = gltf.scene;
-        previewModel = createPreview(ferrariModel);
-        scene.add(previewModel);
-    });
-
-    function onSelect(): void {
-        if (previewModel?.visible && ferrariModel) {
-            const model = ferrariModel.clone();
-            // previewModel.matrix already bakes in the placement scale, so reuse it directly.
-            previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
-            scene.add(model);
-        }
-    }
-
+    // Controllers
     controller1 = renderer.xr.getController(0);
-    controller1.addEventListener('select', onSelect);
+    controller1.addEventListener('select', (event) => { onSelect(event.data); });
     scene.add(controller1);
-
     controller2 = renderer.xr.getController(1);
-    controller2.addEventListener('select', onSelect);
+    controller2.addEventListener('select', (event) => { onSelect(event.data); });
     scene.add(controller2);
+
+    // Helpers
+    pickHelper = new PickHelper();
+    
+    uiManager = new UIManager(
+        (isPlacement) => {
+            if (!isPlacement && previewModel) {
+                previewModel.visible = false;
+            }
+        },
+        () => {
+        },
+        (modelName) => {
+            loadModel(modelName);
+        },
+        availableModels
+    );
+    
+    uiManager.attach(document.body);
+
+    // AR Button & DOM Overlay
+    const arButtonOptions = {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['dom-overlay'],
+        domOverlay: { root: document.body }
+    };
+    document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
+
+    // XREvents
+    renderer.xr.addEventListener('sessionstart', () => uiManager.toggleVisibility(true));
+    renderer.xr.addEventListener('sessionend', () => uiManager.toggleVisibility(false));
+
+
+    if (availableModels.length > 0) {
+        loadModel(availableModels[0]);
+    }
 
     window.addEventListener('resize', onWindowResize);
 }
 
-// Builds a translucent "ghost" of the model to preview the placement spot.
-// Cloned once and reused every frame to avoid per-frame allocations.
+/**
+ * Loads a GLTF model, sets it as the loaded model, and creates a placement preview.
+ */
+function loadModel(modelName: string): void {
+    const url = modelUrls[modelName];
+    if (!url) return;
+
+    if (previewModel) {
+        scene.remove(previewModel);
+        previewModel = null;
+    }
+
+    const loader = new GLTFLoader();
+    loader.load(url, (gltf) => {
+        loadedModel = gltf.scene;
+
+        const box = new THREE.Box3().setFromObject(loadedModel);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const targetSize = 0.3; // 30 cm
+        const scale = maxDim > 0 ? targetSize / maxDim : 1;
+        currentScaleMatrix.makeScale(scale, scale, scale);
+        
+        loadedModel.traverse((child) => {
+            if (child instanceof THREE.Mesh && child.material) {
+                child.material = child.material.clone();
+            }
+        });
+
+        previewModel = createPreview(loadedModel);
+        scene.add(previewModel);
+        
+        if (uiManager) {
+            uiManager.forcePlacementMode(true);
+        }
+    });
+}
+
+/**
+ * Handles select events on the screen, triggering GPU picking and piece selection.
+ */
+function onSelect(inputSource?: XRInputSource): void {
+    if (!renderer.xr.isPresenting) return;
+
+    const pickedMesh = pickHelper.pickXR(inputSource, renderer);
+
+    if (pickedMesh) {
+        pickHelper.handleMeshSelection(pickedMesh, camera);
+    } else {
+        if (pickHelper.attachedParts.length > 0) {
+            pickHelper.attachedParts = [];
+        } else if (pickHelper.selectedMeshes.length > 0) {
+            pickHelper.clearSelection();
+        } else if (uiManager.isPlacementMode && previewModel?.visible && loadedModel) {
+            placeModel();
+        }
+    }
+}
+
+/**
+ * Places the full 3D model at the current location of the AR preview cursor.
+ */
+function placeModel(): void {
+    if (!loadedModel || !previewModel) return;
+
+    const model = loadedModel.clone();
+    previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
+    scene.add(model);
+
+    const pickingModel = pickHelper.createPickingModel(model);
+    pickingModel.position.copy(model.position);
+    pickingModel.quaternion.copy(model.quaternion);
+    pickingModel.scale.copy(model.scale);
+    pickHelper.pickingScene.add(pickingModel);
+
+    if (uiManager.isPlacementMode) {
+        uiManager.forcePlacementMode(false);
+    }
+}
+
+/**
+ * Creates a semi-transparent version of the 3D model for placement preview.
+ */
 function createPreview(source: THREE.Object3D): THREE.Object3D {
     const preview = source.clone();
-
     preview.traverse((child) => {
-        if (!(child instanceof THREE.Mesh)) {
-            return;
-        }
-
-        // Clone materials so the translucency doesn't leak onto placed cars,
-        // which keep sharing the original opaque materials.
-        const makeGhost = (material: THREE.Material): THREE.Material => {
-            const ghost = material.clone();
+        if (!(child instanceof THREE.Mesh) || !child.material) return;
+        const makeGhost = (mat: THREE.Material): THREE.Material => {
+            const ghost = mat.clone();
             ghost.transparent = true;
             ghost.opacity = 0.4;
             ghost.depthWrite = true;
             return ghost;
         };
-
-        const material = child.material as THREE.Material | THREE.Material[];
+        const material = child.material;
         child.material = Array.isArray(material) ? material.map(makeGhost) : makeGhost(material);
     });
-
-    // Driven manually from the hit-test pose each frame.
     preview.matrixAutoUpdate = false;
     preview.visible = false;
-
     return preview;
 }
 
+/**
+ * Updates camera and renderer dimensions when the browser window is resized.
+ */
 function onWindowResize(): void {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-
     renderer.setSize(window.innerWidth, window.innerHeight);
+    pickHelper.resize(window.innerWidth, window.innerHeight, window.devicePixelRatio);
 }
 
+/**
+ * Main animation loop called every frame by the WebXR engine.
+ * Handles AR hit testing, moving parts, and rendering the final scene.
+ */
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
@@ -122,27 +230,22 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                     hitTestSource = source;
                 });
             });
-
             session.addEventListener('end', () => {
                 hitTestSourceRequested = false;
                 hitTestSource = null;
             });
-
             hitTestSourceRequested = true;
         }
 
         if (hitTestSource && referenceSpace && previewModel) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-            if (hitTestResults.length > 0) {
+            if (hitTestResults.length > 0 && uiManager.isPlacementMode) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
-
                 if (pose) {
                     previewModel.visible = true;
-                    previewModel.matrix
-                        .fromArray(pose.transform.matrix)
-                        .multiply(scaleMatrix);
+                    previewModel.matrix.fromArray(pose.transform.matrix).multiply(currentScaleMatrix);
                 }
             } else {
                 previewModel.visible = false;
@@ -150,5 +253,14 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
         }
     }
 
-    renderer.render(scene, camera);
+    pickHelper.updateAttachedMeshes(camera);
+
+    if (uiManager.showPickingColors) {
+        const oldToneMapping = renderer.toneMapping;
+        renderer.toneMapping = THREE.NoToneMapping;
+        renderer.render(pickHelper.pickingScene, camera);
+        renderer.toneMapping = oldToneMapping;
+    } else {
+        renderer.render(scene, camera);
+    }
 }
