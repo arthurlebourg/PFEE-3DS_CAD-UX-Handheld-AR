@@ -8,16 +8,24 @@ export class UIManager {
     private container = document.createElement('div');
     private btnMode = document.createElement('button');
     private btnDebug = document.createElement('button');
+    private selectModel = document.createElement('select');
 
     private onModeCallback: (isPlacement: boolean) => void;
     private onDebugCallback: (showColors: boolean) => void;
+    private onModelCallback: (modelName: string) => void;
 
     /**
      * Initializes the UI buttons and their event listeners.
      */
-    constructor(onModeCallback: (p: boolean) => void, onDebugCallback: (d: boolean) => void) {
+    constructor(
+        onModeCallback: (p: boolean) => void,
+        onDebugCallback: (d: boolean) => void,
+        onModelCallback: (m: string) => void,
+        models: string[]
+    ) {
         this.onModeCallback = onModeCallback;
         this.onDebugCallback = onDebugCallback;
+        this.onModelCallback = onModelCallback;
 
         this.container.style.cssText = 'position:absolute;bottom:120px;left:50%;transform:translateX(-50%);z-index:100;display:none;flex-direction:column;gap:10px;';
         
@@ -25,14 +33,28 @@ export class UIManager {
         this.btnMode.style.cssText = style;
         this.btnDebug.style.cssText = style;
 
+        this.selectModel.style.cssText = 'padding:12px;font-size:16px;border-radius:8px;border:none;pointer-events:auto;background:white;color:black;font-weight:bold;';
+        
+        for (const model of models) {
+            const option = document.createElement('option');
+            option.value = model;
+            option.textContent = model.replace('.glb', '').replace(/_/g, ' ').toUpperCase();
+            this.selectModel.appendChild(option);
+        }
+
         this.btnMode.addEventListener('touchstart', (event) => this.toggleMode(event));
         this.btnMode.addEventListener('click', (event) => this.toggleMode(event));
 
         this.btnDebug.addEventListener('touchstart', (event) => this.toggleDebug(event));
         this.btnDebug.addEventListener('click', (event) => this.toggleDebug(event));
 
+        this.selectModel.addEventListener('change', (event) => {
+            event.stopPropagation();
+            this.onModelCallback(this.selectModel.value);
+        });
+
         this.updateUI();
-        this.container.append(this.btnMode, this.btnDebug);
+        this.container.append(this.selectModel, this.btnMode, this.btnDebug);
     }
 
     /**

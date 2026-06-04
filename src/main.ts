@@ -6,8 +6,15 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
 
-const modelUrl = new URL('../assets/ferrari_f40.glb', import.meta.url).href;
+const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
+const modelUrls: Record<string, string> = {};
+for (const path in modules) {
+    const filename = path.split('/').pop()!;
+    modelUrls[filename] = modules[path] as string;
+}
+const availableModels = Object.keys(modelUrls);
 
+let currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
 let container: HTMLDivElement;
 let camera: THREE.PerspectiveCamera;
 let scene: THREE.Scene;
@@ -20,9 +27,6 @@ let previewModel: THREE.Object3D | null = null;
 
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
-
-const PLACEMENT_SCALE = 0.2;
-const scaleMatrix = new THREE.Matrix4().makeScale(PLACEMENT_SCALE, PLACEMENT_SCALE, PLACEMENT_SCALE);
 
 let uiManager: UIManager;
 let pickHelper: PickHelper;
@@ -69,7 +73,11 @@ function init(): void {
             }
         },
         () => {
-        }
+        },
+        (modelName) => {
+            loadModel(modelName);
+        },
+        availableModels
     );
     
     uiManager.attach(document.body);
@@ -87,9 +95,36 @@ function init(): void {
     renderer.xr.addEventListener('sessionend', () => uiManager.toggleVisibility(false));
 
 
+    if (availableModels.length > 0) {
+        loadModel(availableModels[0]);
+    }
+
+    window.addEventListener('resize', onWindowResize);
+}
+
+/**
+ * Loads a GLTF model, sets it as the loaded model, and creates a placement preview.
+ */
+function loadModel(modelName: string): void {
+    const url = modelUrls[modelName];
+    if (!url) return;
+
+    if (previewModel) {
+        scene.remove(previewModel);
+        previewModel = null;
+    }
+
     const loader = new GLTFLoader();
-    loader.load(modelUrl, (gltf) => {
+    loader.load(url, (gltf) => {
         loadedModel = gltf.scene;
+
+        const box = new THREE.Box3().setFromObject(loadedModel);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const targetSize = 0.3; // 30 cm
+        const scale = maxDim > 0 ? targetSize / maxDim : 1;
+        currentScaleMatrix.makeScale(scale, scale, scale);
         
         loadedModel.traverse((child) => {
             if (child instanceof THREE.Mesh && child.material) {
@@ -99,9 +134,11 @@ function init(): void {
 
         previewModel = createPreview(loadedModel);
         scene.add(previewModel);
+        
+        if (uiManager) {
+            uiManager.forcePlacementMode(true);
+        }
     });
-
-    window.addEventListener('resize', onWindowResize);
 }
 
 /**
@@ -208,7 +245,7 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
                     previewModel.visible = true;
-                    previewModel.matrix.fromArray(pose.transform.matrix).multiply(scaleMatrix);
+                    previewModel.matrix.fromArray(pose.transform.matrix).multiply(currentScaleMatrix);
                 }
             } else {
                 previewModel.visible = false;
