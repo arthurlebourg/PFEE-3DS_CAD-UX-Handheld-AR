@@ -53,8 +53,10 @@ function init(): void {
 
     // Controllers
     controller1 = renderer.xr.getController(0);
+    controller1.addEventListener('select', (event) => { onSelect(event.data); });
     scene.add(controller1);
     controller2 = renderer.xr.getController(1);
+    controller2.addEventListener('select', (event) => { onSelect(event.data); });
     scene.add(controller2);
 
     // Helpers
@@ -100,17 +102,15 @@ function init(): void {
     });
 
     window.addEventListener('resize', onWindowResize);
-    window.addEventListener('touchstart', onTouchStart);
 }
 
 /**
- * Handles touch events on the screen, triggering GPU picking and piece selection.
+ * Handles select events on the screen, triggering GPU picking and piece selection.
  */
-function onTouchStart(event: TouchEvent): void {
-    if (!renderer.xr.isPresenting || event.touches.length === 0) return;
+function onSelect(inputSource?: XRInputSource): void {
+    if (!renderer.xr.isPresenting) return;
 
-    const touch = event.touches[0];
-    const pickedMesh = pickHelper.pick(touch.clientX, touch.clientY, renderer, camera);
+    const pickedMesh = pickHelper.pickXR(inputSource, renderer);
 
     if (pickedMesh) {
         pickHelper.handleMeshSelection(pickedMesh, camera);

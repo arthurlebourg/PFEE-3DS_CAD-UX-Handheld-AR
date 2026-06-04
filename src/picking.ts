@@ -111,25 +111,51 @@ export class PickHelper {
         }
     }
 
+    private pickCamera = new THREE.PerspectiveCamera();
+
     /**
      * Renders the picking scene and reads the pixel color at the specified coordinates to identify the clicked mesh.
      */
-    public pick(x: number, y: number, renderer: THREE.WebGLRenderer, camera: THREE.Camera): THREE.Mesh | null {
-        const dpr = renderer.getPixelRatio();
-        const pixelX = Math.round(x * dpr);
-        const pixelY = Math.round((window.innerHeight - y) * dpr);
+    public pickXR(inputSource: XRInputSource | undefined, renderer: THREE.WebGLRenderer): THREE.Mesh | null {
+        const axes = inputSource?.gamepad?.axes;
+        if (inputSource?.targetRayMode !== 'screen' || !axes || axes.length < 2) {
+            return null;
+        }
+        const ndcX = axes[0];
+        const ndcY = axes[1];
+
+        const xrCamera = renderer.xr.getCamera();
+        const view = xrCamera.cameras[0] ?? xrCamera;
+        
+        this.pickCamera.matrixAutoUpdate = false;
+        this.pickCamera.matrixWorldAutoUpdate = false;
+        this.pickCamera.matrixWorld.copy(view.matrixWorld);
+        this.pickCamera.matrixWorldInverse.copy(view.matrixWorldInverse);
+        this.pickCamera.projectionMatrix.copy(view.projectionMatrix);
+        this.pickCamera.projectionMatrixInverse.copy(view.projectionMatrixInverse);
+
+        const px = Math.floor((ndcX * 0.5 + 0.5) * this.pickingTexture.width);
+        const py = Math.floor((0.5 - ndcY * 0.5) * this.pickingTexture.height);
+
+        if (px < 0 || py < 0 || px >= this.pickingTexture.width || py >= this.pickingTexture.height) {
+            return null;
+        }
 
         const oldToneMapping = renderer.toneMapping;
         renderer.toneMapping = THREE.NoToneMapping;
         
+        const xrWasEnabled = renderer.xr.enabled;
+        renderer.xr.enabled = false;
+        
         renderer.setRenderTarget(this.pickingTexture);
         renderer.clear();
-        renderer.render(this.pickingScene, camera);
+        renderer.render(this.pickingScene, this.pickCamera);
 
         const pixelBuffer = new Uint8Array(4);
-        renderer.readRenderTargetPixels(this.pickingTexture, pixelX, pixelY, 1, 1, pixelBuffer);
+        renderer.readRenderTargetPixels(this.pickingTexture, px, py, 1, 1, pixelBuffer);
         
         renderer.setRenderTarget(null);
+        renderer.xr.enabled = xrWasEnabled;
         renderer.toneMapping = oldToneMapping;
 
         const id = (pixelBuffer[0] << 16) | (pixelBuffer[1] << 8) | pixelBuffer[2];
@@ -192,16 +218,22 @@ export class PickHelper {
      * Visually highlights a mesh by setting its emissive color to bright cyan.
      */
     private highlightMesh(mesh: THREE.Mesh) {
+        if (!mesh.userData.isolatedMaterial) {
+            mesh.material = (mesh.material as THREE.Material).clone();
+            mesh.userData.isolatedMaterial = true;
+        }
+
         const material = mesh.material as THREE.MeshStandardMaterial;
         if (material && material.emissive) {
             if (!mesh.userData[this.EM_KEY]) {
                 mesh.userData[this.EM_KEY] = material.emissive.clone();
+                mesh.userData.originalEmissiveIntensity = material.emissiveIntensity;
             }
             
-            material.emissive.setHex(0x00ffff);
+            material.emissive.setHex(0xff6600);
             
             if ('emissiveIntensity' in material) {
-                material.emissiveIntensity = 2.0;
+                material.emissiveIntensity = 0.6;
             }
         }
     }
@@ -215,8 +247,8 @@ export class PickHelper {
         
         if (material && material.emissive && originalEmissive) {
             material.emissive.copy(originalEmissive);
-            if ('emissiveIntensity' in material) {
-                material.emissiveIntensity = 1.0;
+            if ('emissiveIntensity' in material && mesh.userData.originalEmissiveIntensity !== undefined) {
+                material.emissiveIntensity = mesh.userData.originalEmissiveIntensity;
             }
         }
     }
