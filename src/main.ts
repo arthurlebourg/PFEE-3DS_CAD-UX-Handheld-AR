@@ -160,18 +160,22 @@ function loadModel(modelName: string): void {
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
+    // In placement mode a tap only ever places a model; picking is disabled.
+    if (uiManager.isPlacementMode) {
+        if (previewModel?.visible && loadedModel) {
+            placeModel();
+        }
+        return;
+    }
+
     const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
 
     if (pickedMesh) {
         pickHelper.handleMeshSelection(pickedMesh, camera);
-    } else {
-        if (pickHelper.attachedParts.length > 0) {
-            pickHelper.attachedParts = [];
-        } else if (pickHelper.selectedMeshes.length > 0) {
-            pickHelper.clearSelection();
-        } else if (uiManager.isPlacementMode && previewModel?.visible && loadedModel) {
-            placeModel();
-        }
+    } else if (pickHelper.attachedParts.length > 0) {
+        pickHelper.attachedParts = [];
+    } else if (pickHelper.selectedMeshes.length > 0) {
+        pickHelper.clearSelection();
     }
 }
 
@@ -186,10 +190,6 @@ function placeModel(): void {
     scene.add(model);
 
     pickHelper.registerModel(model);
-
-    if (uiManager.isPlacementMode) {
-        uiManager.forcePlacementMode(false);
-    }
 }
 
 /**
