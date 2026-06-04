@@ -62,6 +62,12 @@ export class UIManager {
             this.onModelCallback(this.selectModel.value);
         });
 
+        // In a dom-overlay XR session, a tap on an overlay element still emits an
+        // XR 'select' event (which would place/pick) unless we cancel the
+        // beforexrselect the browser dispatches first. It bubbles, so one
+        // listener on the container covers every button and the dropdown.
+        this.container.addEventListener('beforexrselect', (event) => event.preventDefault());
+
         this.updateUI();
         this.container.append(this.selectModel, this.btnMode, this.btnDebug, this.btnPerf);
     }
@@ -78,6 +84,7 @@ export class UIManager {
      */
     private toggleMode(event: Event) {
         event.stopPropagation();
+        event.preventDefault();
         this.isPlacementMode = !this.isPlacementMode;
         this.updateUI();
         this.onModeCallback(this.isPlacementMode);
@@ -88,6 +95,7 @@ export class UIManager {
      */
     private toggleDebug(event: Event) {
         event.stopPropagation();
+        event.preventDefault();
         this.showPickingColors = !this.showPickingColors;
         this.updateUI();
         this.onDebugCallback(this.showPickingColors);
@@ -98,6 +106,7 @@ export class UIManager {
      */
     private togglePerf(event: Event) {
         event.stopPropagation();
+        event.preventDefault();
         this.showPerf = !this.showPerf;
         this.updateUI();
         this.onPerfCallback(this.showPerf);
