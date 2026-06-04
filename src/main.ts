@@ -161,7 +161,7 @@ function loadModel(modelName: string): void {
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
-    const pickedMesh = pickHelper.pickXR(inputSource, renderer, perf);
+    const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
 
     if (pickedMesh) {
         pickHelper.handleMeshSelection(pickedMesh, camera);
@@ -186,11 +186,7 @@ function placeModel(): void {
     previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
     scene.add(model);
 
-    const pickingModel = pickHelper.createPickingModel(model);
-    pickingModel.position.copy(model.position);
-    pickingModel.quaternion.copy(model.quaternion);
-    pickingModel.scale.copy(model.scale);
-    pickHelper.pickingScene.add(pickingModel);
+    pickHelper.registerModel(model);
 
     if (uiManager.isPlacementMode) {
         uiManager.forcePlacementMode(false);
@@ -272,10 +268,7 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     pickHelper.updateAttachedMeshes(camera);
 
     if (uiManager.showPickingColors) {
-        const oldToneMapping = renderer.toneMapping;
-        renderer.toneMapping = THREE.NoToneMapping;
-        renderer.render(pickHelper.pickingScene, camera);
-        renderer.toneMapping = oldToneMapping;
+        pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {
         renderer.render(scene, camera);
     }

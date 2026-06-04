@@ -99,7 +99,6 @@ export class PerfProbe {
     private readonly pickPhases: Record<PickPhase, RollingWindow>;
     private pickHits = 0;
     private pickMisses = 0;
-    private pickResolution = '–';
 
     // Per-pick scratch state.
     private pickStart = 0;
@@ -199,8 +198,7 @@ export class PerfProbe {
     // --- Pick phase instrumentation ---------------------------------------
 
     /** Marks the start of a pick. Call right before the off-screen pass. */
-    beginPick(targetWidth: number, targetHeight: number): void {
-        this.pickResolution = `${targetWidth}x${targetHeight}`;
+    beginPick(): void {
         this.currentPhases = { prep: 0, render: 0, readback: 0 };
         this.pickStart = performance.now();
         this.phaseMark = this.pickStart;
@@ -263,7 +261,6 @@ export class PerfProbe {
             `  total p50 ${pick.p50.toFixed(2)} p95 ${pick.p95.toFixed(2)} max ${pick.max.toFixed(2)}ms`,
             `  prep ${prep.mean.toFixed(2)} | render ${render.mean.toFixed(2)} | readback ${readback.mean.toFixed(2)}ms`,
             `  hitch p50 ${hitch.p50.toFixed(1)} p95 ${hitch.p95.toFixed(1)}ms`,
-            `  target ${this.pickResolution}`,
         ];
         this.hud.textContent = lines.join('\n');
     }

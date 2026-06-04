@@ -6,25 +6,35 @@ interface AttachedPart {
     offsetMatrix: THREE.Matrix4;
 }
 
+type MaterialBackup = { mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] };
+
+/** Layer the pick camera renders in isolation, so only pickable meshes hit the id buffer. */
+const PICK_LAYER = 1;
+
 /**
- * PickHelper: Handles GPU-based picking (color ID rendering) and multi-selection dragging.
+ * PickHelper: GPU colour picking via in-place material swapping.
+ *
+ * Each registered mesh is briefly swapped to a flat id-colour material and the
+ * real scene is rendered off-screen through a layer-masked camera, then restored.
+ * Drawing the actual meshes means picks always match what's on screen (including
+ * mid-drag) with no parallel scene to keep in sync.
  */
 export class PickHelper {
-    public pickingScene: THREE.Scene;
     public pickingTexture: THREE.WebGLRenderTarget;
-    
+
     public selectedMeshes: THREE.Mesh[] = [];
     public attachedParts: AttachedPart[] = [];
-    
+
     private idToMeshMap = new Map<number, THREE.Mesh>();
-    private meshToPickMap = new Map<THREE.Mesh, THREE.Mesh>();
+    private nextId = 1;
     private readonly EM_KEY = 'originalEmissive';
 
+    private pickCamera = new THREE.PerspectiveCamera();
+
     /**
-     * Initializes the picking scene and the off-screen render target.
+     * Initializes the off-screen render target used for the pick pass.
      */
     constructor() {
-        this.pickingScene = new THREE.Scene();
         const dpr = window.devicePixelRatio;
         this.pickingTexture = new THREE.WebGLRenderTarget(window.innerWidth * dpr, window.innerHeight * dpr, {
             minFilter: THREE.NearestFilter,
@@ -43,48 +53,35 @@ export class PickHelper {
     }
 
     /**
-     * Clones the visual model and assigns a unique flat color (ID) to each part.
+     * Registers every sub-mesh of a placed model as an individually pickable
+     * part: assigns it a unique id encoded as an RGB colour, caches a flat
+     * id-material for the pick pass, and enables the pick layer so the pick
+     * camera will render it.
      */
-    public createPickingModel(model: THREE.Object3D): THREE.Object3D {
-        const pickModel = model.clone();
-        
-        const originalMeshes: THREE.Mesh[] = [];
+    public registerModel(model: THREE.Object3D): void {
         model.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                originalMeshes.push(child);
+            if (!(child instanceof THREE.Mesh)) {
+                return;
             }
+
+            const id = this.nextId++;
+
+            const color = new THREE.Color();
+            color.r = ((id >> 16) & 255) / 255;
+            color.g = ((id >> 8) & 255) / 255;
+            color.b = (id & 255) / 255;
+
+            // Write the id colour verbatim: no tone mapping, no blending, both faces.
+            child.userData.pickMaterial = new THREE.MeshBasicMaterial({
+                color,
+                blending: THREE.NoBlending,
+                side: THREE.DoubleSide,
+                toneMapped: false
+            });
+
+            child.layers.enable(PICK_LAYER);
+            this.idToMeshMap.set(id, child);
         });
-
-        let meshIndex = 0;
-        pickModel.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                const originalMesh = originalMeshes[meshIndex];
-                
-                let id: number;
-                do {
-                    id = Math.floor(Math.random() * 0xffffff);
-                    id = id | 0x333333;
-                } while (this.idToMeshMap.has(id));
-
-                this.idToMeshMap.set(id, originalMesh);
-                this.meshToPickMap.set(originalMesh, child);
-
-                const color = new THREE.Color();
-                color.r = ((id >> 16) & 255) / 255;
-                color.g = ((id >> 8) & 255) / 255;
-                color.b = (id & 255) / 255;
-                
-                child.material = new THREE.MeshBasicMaterial({
-                    color: color,
-                    blending: THREE.NoBlending,
-                    side: THREE.DoubleSide
-                });
-                
-                meshIndex++;
-            }
-        });
-        
-        return pickModel;
     }
 
     /**
@@ -102,24 +99,42 @@ export class PickHelper {
             const targetWorldPos = new THREE.Vector3().setFromMatrixPosition(targetWorldMatrix);
 
             part.mesh.parent.worldToLocal(targetWorldPos);
-
             part.mesh.position.lerp(targetWorldPos, 0.15);
-
-            const pickingMesh = this.meshToPickMap.get(part.mesh);
-            if (pickingMesh) {
-                pickingMesh.position.copy(part.mesh.position);
-            }
         }
     }
 
-    private pickCamera = new THREE.PerspectiveCamera();
+    /**
+     * Swaps every registered mesh to its flat id-material, returning the list of
+     * originals so they can be restored after the pick render.
+     */
+    private swapToPickMaterials(): MaterialBackup[] {
+        const backup: MaterialBackup[] = [];
+        for (const mesh of this.idToMeshMap.values()) {
+            backup.push({ mesh, material: mesh.material });
+            mesh.material = mesh.userData.pickMaterial as THREE.MeshBasicMaterial;
+        }
+        return backup;
+    }
 
     /**
-     * Renders the picking scene and reads the pixel color at the specified coordinates to identify the clicked mesh.
+     * Restores the visible materials swapped out by {@link swapToPickMaterials}.
      */
-    public pickXR(inputSource: XRInputSource | undefined, renderer: THREE.WebGLRenderer, probe?: PerfProbe): THREE.Mesh | null {
+    private restoreMaterials(backup: MaterialBackup[]) {
+        for (const entry of backup) {
+            entry.mesh.material = entry.material;
+        }
+    }
+
+    /**
+     * Renders the scene off-screen with id-colour materials and reads back the
+     * pixel under the tap to identify the clicked mesh.
+     */
+    public pickXR(inputSource: XRInputSource | undefined, renderer: THREE.WebGLRenderer, scene: THREE.Scene, probe?: PerfProbe): THREE.Mesh | null {
         const axes = inputSource?.gamepad?.axes;
         if (inputSource?.targetRayMode !== 'screen' || !axes || axes.length < 2) {
+            return null;
+        }
+        if (this.idToMeshMap.size === 0) {
             return null;
         }
         const ndcX = axes[0];
@@ -132,7 +147,7 @@ export class PickHelper {
             return null;
         }
 
-        probe?.beginPick(this.pickingTexture.width, this.pickingTexture.height);
+        probe?.beginPick();
 
         const xrCamera = renderer.xr.getCamera();
         const view = xrCamera.cameras[0] ?? xrCamera;
@@ -143,6 +158,8 @@ export class PickHelper {
         this.pickCamera.matrixWorldInverse.copy(view.matrixWorldInverse);
         this.pickCamera.projectionMatrix.copy(view.projectionMatrix);
         this.pickCamera.projectionMatrixInverse.copy(view.projectionMatrixInverse);
+        // Render only pickable meshes; the preview ghost and controllers are skipped.
+        this.pickCamera.layers.set(PICK_LAYER);
 
         const oldToneMapping = renderer.toneMapping;
         renderer.toneMapping = THREE.NoToneMapping;
@@ -150,25 +167,59 @@ export class PickHelper {
         const xrWasEnabled = renderer.xr.enabled;
         renderer.xr.enabled = false;
 
-        renderer.setRenderTarget(this.pickingTexture);
-        renderer.clear();
-        probe?.split('prep');
+        // Scissor the render to the single pixel under the tap: full-resolution
+        // projection, but only one fragment is ever shaded. Set on the target so
+        // it applies at bind time and survives clear()/render().
+        this.pickingTexture.scissor.set(px, py, 1, 1);
+        this.pickingTexture.scissorTest = true;
 
-        renderer.render(this.pickingScene, this.pickCamera);
-        probe?.split('render');
-
+        const backup = this.swapToPickMaterials();
         const pixelBuffer = new Uint8Array(4);
-        renderer.readRenderTargetPixels(this.pickingTexture, px, py, 1, 1, pixelBuffer);
-        probe?.split('readback');
 
-        renderer.setRenderTarget(null);
-        renderer.xr.enabled = xrWasEnabled;
-        renderer.toneMapping = oldToneMapping;
+        try {
+            renderer.setRenderTarget(this.pickingTexture);
+            renderer.clear();
+            probe?.split('prep');
+
+            renderer.render(scene, this.pickCamera);
+            probe?.split('render');
+
+            renderer.readRenderTargetPixels(this.pickingTexture, px, py, 1, 1, pixelBuffer);
+            probe?.split('readback');
+        } finally {
+            this.restoreMaterials(backup);
+            this.pickingTexture.scissorTest = false;
+            renderer.setRenderTarget(null);
+            renderer.xr.enabled = xrWasEnabled;
+            renderer.toneMapping = oldToneMapping;
+        }
 
         const id = (pixelBuffer[0] << 16) | (pixelBuffer[1] << 8) | pixelBuffer[2];
         const pickedMesh = id > 0 ? (this.idToMeshMap.get(id) ?? null) : null;
         probe?.endPick(pickedMesh !== null);
         return pickedMesh;
+    }
+
+    /**
+     * Debug view: renders the id-colour materials on screen.
+     * Note: under an active XR session the headset camera ignores the layer mask,
+     * so the id-coloured parts show within the normal scene rather than on black.
+     */
+    public renderPickingDebug(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera) {
+        const backup = this.swapToPickMaterials();
+        const oldMask = camera.layers.mask;
+        const oldToneMapping = renderer.toneMapping;
+
+        camera.layers.set(PICK_LAYER);
+        renderer.toneMapping = THREE.NoToneMapping;
+
+        try {
+            renderer.render(scene, camera);
+        } finally {
+            renderer.toneMapping = oldToneMapping;
+            camera.layers.mask = oldMask;
+            this.restoreMaterials(backup);
+        }
     }
 
     /**
@@ -211,7 +262,7 @@ export class PickHelper {
         for (const mesh of this.selectedMeshes) {
             const meshWorldMatrix = mesh.matrixWorld;
             const offsetMatrix = new THREE.Matrix4().multiplyMatrices(cameraInverse, meshWorldMatrix);
-            
+
             this.attachedParts.push({
                 mesh: mesh,
                 offsetMatrix: offsetMatrix
@@ -220,7 +271,7 @@ export class PickHelper {
     }
 
     /**
-     * Visually highlights a mesh by setting its emissive color to bright cyan.
+     * Visually highlights a mesh by setting its emissive color to bright orange.
      */
     private highlightMesh(mesh: THREE.Mesh) {
         if (!mesh.userData.isolatedMaterial) {
@@ -234,9 +285,9 @@ export class PickHelper {
                 mesh.userData[this.EM_KEY] = material.emissive.clone();
                 mesh.userData.originalEmissiveIntensity = material.emissiveIntensity;
             }
-            
+
             material.emissive.setHex(0xff6600);
-            
+
             if ('emissiveIntensity' in material) {
                 material.emissiveIntensity = 0.6;
             }
@@ -249,7 +300,7 @@ export class PickHelper {
     private removeHighlight(mesh: THREE.Mesh) {
         const material = mesh.material as THREE.MeshStandardMaterial;
         const originalEmissive = mesh.userData[this.EM_KEY];
-        
+
         if (material && material.emissive && originalEmissive) {
             material.emissive.copy(originalEmissive);
             if ('emissiveIntensity' in material && mesh.userData.originalEmissiveIntensity !== undefined) {
