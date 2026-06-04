@@ -45,11 +45,16 @@ function init(): void {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // No MSAA: the full-resolution resolve every frame is a major fill cost on
+    // mobile, and WebXR applies its own AA to the composited layer.
+    renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setAnimationLoop(animate);
     renderer.xr.enabled = true;
+    // setPixelRatio does not control the XR render resolution; the XR layer does.
+    // At full device DPR the app is fill-bound, so shade fewer fragments.
+    renderer.xr.setFramebufferScaleFactor(0.7);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
@@ -57,7 +62,6 @@ function init(): void {
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
 
-    // Controllers
     controller1 = renderer.xr.getController(0);
     controller1.addEventListener('select', (event) => { onSelect(event.data); });
     scene.add(controller1);
@@ -65,7 +69,6 @@ function init(): void {
     controller2.addEventListener('select', (event) => { onSelect(event.data); });
     scene.add(controller2);
 
-    // Helpers
     pickHelper = new PickHelper();
     perf = new PerfProbe({ visible: false });
     perf.mount(document.body);
@@ -89,7 +92,6 @@ function init(): void {
     
     uiManager.attach(document.body);
 
-    // AR Button & DOM Overlay
     const arButtonOptions = {
         requiredFeatures: ['hit-test'],
         optionalFeatures: ['dom-overlay'],
@@ -97,13 +99,8 @@ function init(): void {
     };
     document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
 
-    // XREvents
     renderer.xr.addEventListener('sessionstart', () => {
         uiManager.toggleVisibility(true);
-        const session = renderer.xr.getSession();
-        if (session?.frameRate) {
-            perf.setTargetHz(session.frameRate);
-        }
     });
     renderer.xr.addEventListener('sessionend', () => {
         uiManager.toggleVisibility(false);

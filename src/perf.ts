@@ -2,8 +2,7 @@
  * PerfProbe: lightweight runtime instrumentation for frame timing and GPU picking.
  *
  * It collects two families of metrics:
- *  - Frame metrics: per-frame delta, FPS, dropped frames, and the extra cost a
- *    pick adds to the frame it lands in ("hitch").
+ *  - Frame metrics: per-frame delta and FPS.
  *  - Pick metrics: end-to-end pick latency broken into prep / render / readback
  *    phases. Because readRenderTargetPixels() is a synchronous GPU->CPU flush,
  *    wrapping performance.now() around the render+readback captures the real GPU
@@ -75,7 +74,7 @@ class RollingWindow {
 }
 
 interface PerfProbeOptions {
-    /** Frame samples to retain (~2s at 60Hz by default). */
+    /** Frame samples to retain (120 by default; ~2s at 60Hz, ~4s at 30Hz). */
     frameWindow?: number;
     /** Pick samples to retain. */
     pickWindow?: number;
@@ -85,20 +84,13 @@ interface PerfProbeOptions {
 
 export class PerfProbe {
     // --- Frame timing ---
-    private targetHz = 60;
     private lastFrameTimestamp = 0;
-    private totalFrames = 0;
-    private droppedFrames = 0;
     private readonly frameDeltas: RollingWindow;
-    /** Extra frame cost on frames that contained a pick. */
-    private readonly pickHitches: RollingWindow;
-    private pickHappenedSinceLastFrame = false;
 
     // --- Pick timing ---
     private readonly pickTotal: RollingWindow;
     private readonly pickPhases: Record<PickPhase, RollingWindow>;
-    private pickHits = 0;
-    private pickMisses = 0;
+    private pickCount = 0;
 
     // Per-pick scratch state.
     private pickStart = 0;
@@ -113,7 +105,6 @@ export class PerfProbe {
 
     constructor(options: PerfProbeOptions = {}) {
         this.frameDeltas = new RollingWindow(options.frameWindow ?? 120);
-        this.pickHitches = new RollingWindow(options.pickWindow ?? 60);
         this.pickTotal = new RollingWindow(options.pickWindow ?? 60);
         this.pickPhases = {
             prep: new RollingWindow(options.pickWindow ?? 60),
@@ -160,17 +151,6 @@ export class PerfProbe {
         this.setVisible(!this.visible);
     }
 
-    /** Sets the frame budget from the active XR session's refresh rate. */
-    setTargetHz(hz: number): void {
-        if (hz > 0) {
-            this.targetHz = hz;
-        }
-    }
-
-    private get budgetMs(): number {
-        return 1000 / this.targetHz;
-    }
-
     /**
      * Call once at the top of the animation loop. `timestamp` is the
      * DOMHighResTimeStamp the XR/raf loop hands you.
@@ -179,17 +159,6 @@ export class PerfProbe {
         if (this.lastFrameTimestamp > 0) {
             const delta = timestamp - this.lastFrameTimestamp;
             this.frameDeltas.push(delta);
-            this.totalFrames++;
-            // A frame that runs well past one refresh interval is a visible hitch.
-            if (delta > this.budgetMs * 1.5) {
-                this.droppedFrames++;
-            }
-            // A pick fires from a 'select' handler between frames, so its cost
-            // shows up as inflated delta on the *next* frame.
-            if (this.pickHappenedSinceLastFrame) {
-                this.pickHitches.push(delta);
-                this.pickHappenedSinceLastFrame = false;
-            }
         }
         this.lastFrameTimestamp = timestamp;
         this.refreshHud(timestamp);
@@ -213,19 +182,13 @@ export class PerfProbe {
     }
 
     /** Finalizes a pick, pushing its timings into the rolling windows. */
-    endPick(hit: boolean): void {
+    endPick(): void {
         const total = performance.now() - this.pickStart;
         this.pickTotal.push(total);
         this.pickPhases.prep.push(this.currentPhases.prep);
         this.pickPhases.render.push(this.currentPhases.render);
         this.pickPhases.readback.push(this.currentPhases.readback);
-        this.pickHappenedSinceLastFrame = true;
-
-        if (hit) {
-            this.pickHits++;
-        } else {
-            this.pickMisses++;
-        }
+        this.pickCount++;
 
         try {
             performance.measure('pick', 'pick:start');
@@ -251,16 +214,12 @@ export class PerfProbe {
         const prep = this.pickPhases.prep.stats();
         const render = this.pickPhases.render.stats();
         const readback = this.pickPhases.readback.stats();
-        const hitch = this.pickHitches.stats();
-        const picks = this.pickHits + this.pickMisses;
 
         const lines = [
-            `FPS  ${fps.toFixed(1)}  (frame p50 ${frame.p50.toFixed(1)} p95 ${frame.p95.toFixed(1)}ms)`,
-            `drops ${this.droppedFrames}/${this.totalFrames}  budget ${this.budgetMs.toFixed(1)}ms @ ${this.targetHz}Hz`,
-            `PICK n=${picks}  hit ${this.pickHits}/${picks}`,
-            `  total p50 ${pick.p50.toFixed(2)} p95 ${pick.p95.toFixed(2)} max ${pick.max.toFixed(2)}ms`,
-            `  prep ${prep.mean.toFixed(2)} | render ${render.mean.toFixed(2)} | readback ${readback.mean.toFixed(2)}ms`,
-            `  hitch p50 ${hitch.p50.toFixed(1)} p95 ${hitch.p95.toFixed(1)}ms`,
+            `FPS  ${fps.toFixed(1)}  (frame p50 ${frame.p50.toFixed(1)}ms p95 ${frame.p95.toFixed(1)}ms)`,
+            `PICK n=${this.pickCount}`,
+            `  total p50 ${pick.p50.toFixed(2)}ms p95 ${pick.p95.toFixed(2)}ms max ${pick.max.toFixed(2)}ms`,
+            `  prep ${prep.mean.toFixed(2)}ms | render ${render.mean.toFixed(2)}ms | readback ${readback.mean.toFixed(2)}ms`,
         ];
         this.hud.textContent = lines.join('\n');
     }

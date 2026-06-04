@@ -196,7 +196,7 @@ export class PickHelper {
 
         const id = (pixelBuffer[0] << 16) | (pixelBuffer[1] << 8) | pixelBuffer[2];
         const pickedMesh = id > 0 ? (this.idToMeshMap.get(id) ?? null) : null;
-        probe?.endPick(pickedMesh !== null);
+        probe?.endPick();
         return pickedMesh;
     }
 
