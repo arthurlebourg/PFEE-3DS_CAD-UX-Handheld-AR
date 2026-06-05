@@ -80,7 +80,7 @@ export class PickHelper {
             });
 
             child.layers.enable(PICK_LAYER);
-            this.idToMeshMap.set(id, child);
+            this.idToMeshMap.set(id, child as THREE.Mesh);
         });
     }
 
@@ -299,12 +299,13 @@ export class PickHelper {
      */
     private removeHighlight(mesh: THREE.Mesh) {
         const material = mesh.material as THREE.MeshStandardMaterial;
-        const originalEmissive = mesh.userData[this.EM_KEY];
+        const originalEmissive = mesh.userData[this.EM_KEY] as THREE.Color | undefined;
 
         if (material && material.emissive && originalEmissive) {
             material.emissive.copy(originalEmissive);
-            if ('emissiveIntensity' in material && mesh.userData.originalEmissiveIntensity !== undefined) {
-                material.emissiveIntensity = mesh.userData.originalEmissiveIntensity;
+            const originalIntensity = mesh.userData.originalEmissiveIntensity as number | undefined;
+            if ('emissiveIntensity' in material && originalIntensity !== undefined) {
+                material.emissiveIntensity = originalIntensity;
             }
         }
     }

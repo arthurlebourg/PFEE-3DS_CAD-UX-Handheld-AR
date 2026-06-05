@@ -15,7 +15,7 @@ for (const path in modules) {
 }
 const availableModels = Object.keys(modelUrls);
 
-let currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
+const currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
 let container: HTMLDivElement;
 let camera: THREE.PerspectiveCamera;
 let scene: THREE.Scene;
@@ -140,9 +140,11 @@ function loadModel(modelName: string): void {
         currentScaleMatrix.makeScale(scale, scale, scale);
         
         loadedModel.traverse((child) => {
-            if (child instanceof THREE.Mesh && child.material) {
-                child.material = child.material.clone();
-            }
+            if (!(child instanceof THREE.Mesh)) return;
+            const mesh = child as THREE.Mesh;
+            mesh.material = Array.isArray(mesh.material)
+                ? mesh.material.map((mat) => mat.clone())
+                : mesh.material.clone();
         });
 
         previewModel = createPreview(loadedModel);
@@ -198,7 +200,8 @@ function placeModel(): void {
 function createPreview(source: THREE.Object3D): THREE.Object3D {
     const preview = source.clone();
     preview.traverse((child) => {
-        if (!(child instanceof THREE.Mesh) || !child.material) return;
+        if (!(child instanceof THREE.Mesh)) return;
+        const mesh = child as THREE.Mesh;
         const makeGhost = (mat: THREE.Material): THREE.Material => {
             const ghost = mat.clone();
             ghost.transparent = true;
@@ -206,8 +209,9 @@ function createPreview(source: THREE.Object3D): THREE.Object3D {
             ghost.depthWrite = true;
             return ghost;
         };
-        const material = child.material;
-        child.material = Array.isArray(material) ? material.map(makeGhost) : makeGhost(material);
+        mesh.material = Array.isArray(mesh.material)
+            ? mesh.material.map(makeGhost)
+            : makeGhost(mesh.material);
     });
     preview.matrixAutoUpdate = false;
     preview.visible = false;
