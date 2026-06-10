@@ -6,6 +6,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
 import { PerfProbe } from './perf.js';
+import { VirtualJoycon } from './virtualJoycon.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -30,6 +31,7 @@ let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
 
 let uiManager: UIManager;
+let virtualJoycon: VirtualJoycon;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
 
@@ -91,6 +93,8 @@ function init(): void {
     );
     
     uiManager.attach(document.body);
+    virtualJoycon = new VirtualJoycon();
+    virtualJoycon.attach(document.body);
 
     const arButtonOptions = {
         requiredFeatures: ['hit-test'],
