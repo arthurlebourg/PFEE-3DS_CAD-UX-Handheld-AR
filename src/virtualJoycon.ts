@@ -4,10 +4,15 @@ export class VirtualJoycon {
 
   private startX = 0;
   private startY = 0;
+  private lastX = 0;
+
   private active = false;
   private pressTimer: number | null = null;
 
-  constructor() {
+private onHorizontalMove: (deltaX: number) => void;
+
+constructor(onHorizontalMove: (deltaX: number) => void) {
+  this.onHorizontalMove = onHorizontalMove;
     this.root.style.cssText = `
       position:absolute;
       width:120px;
@@ -46,8 +51,10 @@ export class VirtualJoycon {
       if (event.touches.length !== 1) return;
 
       const touch = event.touches[0];
+
       this.startX = touch.clientX;
       this.startY = touch.clientY;
+      this.lastX = touch.clientX;
 
       this.pressTimer = window.setTimeout(() => {
         this.active = true;
@@ -59,11 +66,15 @@ export class VirtualJoycon {
       if (!this.active) return;
 
       const touch = event.touches[0];
+
       const dx = touch.clientX - this.startX;
       const dy = touch.clientY - this.startY;
 
+      const deltaX = touch.clientX - this.lastX;
+      this.lastX = touch.clientX;
+
       this.moveStick(dx, dy);
-      this.printDirection(dx, dy);
+      this.readDirection(deltaX);
 
       event.preventDefault();
     });
@@ -87,12 +98,15 @@ export class VirtualJoycon {
       `translate(calc(-50% + ${dx * scale}px), calc(-50% + ${dy * scale}px))`;
   }
 
-  private printDirection(dx: number, dy: number) {
-    const threshold = 25;
+  private readDirection(deltaX: number) {
+    const threshold = 1;
 
-    if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > threshold) console.log('move right');
-      else if (dx < -threshold) console.log('move left');
+    if (deltaX > threshold) {
+      console.log('move right');
+      this.onHorizontalMove(deltaX);
+    } else if (deltaX < -threshold) {
+      console.log('move left');
+      this.onHorizontalMove(deltaX);
     }
   }
 

@@ -7,6 +7,7 @@ import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
 import { PerfProbe } from './perf.js';
 import { VirtualJoycon } from './virtualJoycon.js';
+import { SceneRotator } from './sceneRotator.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -32,7 +33,8 @@ let hitTestSourceRequested = false;
 
 let uiManager: UIManager;
 let virtualJoycon: VirtualJoycon;
-let pickHelper: PickHelper;
+let sceneRotator: SceneRotator;
+const placedModels: THREE.Object3D[] = [];let pickHelper: PickHelper;
 let perf: PerfProbe;
 
 init();
@@ -93,7 +95,13 @@ function init(): void {
     );
     
     uiManager.attach(document.body);
-    virtualJoycon = new VirtualJoycon();
+    sceneRotator = new SceneRotator();
+
+    virtualJoycon = new VirtualJoycon((deltaX) => {
+    const speed = 0.01;
+    sceneRotator.rotateAroundCenter(placedModels, deltaX * speed);
+    });
+
     virtualJoycon.attach(document.body);
 
     const arButtonOptions = {
@@ -194,6 +202,8 @@ function placeModel(): void {
     const model = loadedModel.clone();
     previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
     scene.add(model);
+    placedModels.push(model);
+    pickHelper.registerModel(model);
 
     pickHelper.registerModel(model);
 }
