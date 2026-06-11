@@ -98,7 +98,7 @@ function init(): void {
     sceneRotator = new SceneRotator();
 
     virtualJoycon = new VirtualJoycon((direction) => {
-    const speed = 0.02;
+    const speed = 0.04;
     sceneRotator.rotateAroundCenter(placedModels, direction * speed);
     });
 

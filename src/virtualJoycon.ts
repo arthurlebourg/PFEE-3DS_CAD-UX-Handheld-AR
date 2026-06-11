@@ -70,7 +70,7 @@ export class VirtualJoycon {
         this.wasUsed = true;
         this.show(this.startX, this.startY);
         this.startLoop();
-      }, 400);
+      }, 1000);
     }, { passive: false });
 
     parent.addEventListener('touchmove', (event) => {
@@ -125,13 +125,18 @@ export class VirtualJoycon {
 
       const dx = this.currentX - this.startX;
 
-      const deadZone = 8;
+      const deadZone = 6;
       const maxDistance = 40;
 
       if (Math.abs(dx) > deadZone) {
-        const strength = Math.max(-1, Math.min(1, dx / maxDistance));
+        const sign = Math.sign(dx);
 
-        this.onHorizontalMove(strength);
+        const normalized =
+          Math.min(Math.abs(dx), maxDistance) / maxDistance;
+
+        const curved = normalized * normalized * normalized;
+
+        this.onHorizontalMove(sign * curved);
       }
 
       this.animationFrame = requestAnimationFrame(loop);
