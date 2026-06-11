@@ -23,6 +23,10 @@ let renderer: THREE.WebGLRenderer;
 let controller1: THREE.XRTargetRaySpace;
 let controller2: THREE.XRTargetRaySpace;
 
+let xrRig: THREE.Group;
+let rigScale = 1.0;
+const placedModels: THREE.Object3D[] = [];
+
 let loadedModel: THREE.Object3D | null = null;
 let previewModel: THREE.Object3D | null = null;
 
@@ -43,7 +47,12 @@ function init(): void {
     document.body.appendChild(container);
 
     scene = new THREE.Scene();
+    
+    xrRig = new THREE.Group();
+    scene.add(xrRig);
+
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+    xrRig.add(camera);
 
     // No MSAA: the full-resolution resolve every frame is a major fill cost on
     // mobile, and WebXR applies its own AA to the composited layer.
@@ -64,10 +73,10 @@ function init(): void {
 
     controller1 = renderer.xr.getController(0);
     controller1.addEventListener('select', (event) => { onSelect(event.data); });
-    scene.add(controller1);
+    xrRig.add(controller1);
     controller2 = renderer.xr.getController(1);
     controller2.addEventListener('select', (event) => { onSelect(event.data); });
-    scene.add(controller2);
+    xrRig.add(controller2);
 
     pickHelper = new PickHelper();
     perf = new PerfProbe({ visible: false });
@@ -86,6 +95,9 @@ function init(): void {
         },
         (showPerf) => {
             perf.setVisible(showPerf);
+        },
+        (scale) => {
+            updateRigScale(scale);
         },
         availableModels
     );
@@ -130,14 +142,6 @@ function loadModel(modelName: string): void {
     const loader = new GLTFLoader();
     loader.load(url, (gltf) => {
         loadedModel = gltf.scene;
-
-        const box = new THREE.Box3().setFromObject(loadedModel);
-        const size = new THREE.Vector3();
-        box.getSize(size);
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const targetSize = 0.3; // 30 cm
-        const scale = maxDim > 0 ? targetSize / maxDim : 1;
-        currentScaleMatrix.makeScale(scale, scale, scale);
         
         loadedModel.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) return;
@@ -182,6 +186,35 @@ function onSelect(inputSource?: XRInputSource): void {
 }
 
 /**
+ * Updates the scale of the camera rig and adjusts placed models' positions
+ * to keep them anchored to their physical positions.
+ */
+function updateRigScale(newScale: number): void {
+    rigScale = newScale;
+    
+    if (xrRig) {
+        xrRig.scale.set(rigScale, rigScale, rigScale);
+    }
+    
+    // Update all placed models' positions to remain anchored physically
+    for (const model of placedModels) {
+        if (model.userData.physicalPosition) {
+            model.position.copy(model.userData.physicalPosition).multiplyScalar(rigScale);
+        }
+    }
+    
+    // Update preview model position
+    if (previewModel && previewModel.userData.physicalPosition) {
+        previewModel.position.copy(previewModel.userData.physicalPosition).multiplyScalar(rigScale);
+    }
+
+    // Clear picking selection to prevent offset/scale mismatch while dragging
+    if (pickHelper) {
+        pickHelper.clearSelection();
+    }
+}
+
+/**
  * Places the full 3D model at the current location of the AR preview cursor.
  */
 function placeModel(): void {
@@ -189,7 +222,14 @@ function placeModel(): void {
 
     const model = loadedModel.clone();
     previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
+    
+    if (previewModel.userData.physicalPosition) {
+        model.userData.physicalPosition = previewModel.userData.physicalPosition.clone();
+        model.userData.physicalRotation = previewModel.userData.physicalRotation.clone();
+    }
+    
     scene.add(model);
+    placedModels.push(model);
 
     pickHelper.registerModel(model);
 }
@@ -213,7 +253,6 @@ function createPreview(source: THREE.Object3D): THREE.Object3D {
             ? mesh.material.map(makeGhost)
             : makeGhost(mesh.material);
     });
-    preview.matrixAutoUpdate = false;
     preview.visible = false;
     return preview;
 }
@@ -260,7 +299,27 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
                     previewModel.visible = true;
-                    previewModel.matrix.fromArray(pose.transform.matrix).multiply(currentScaleMatrix);
+                    
+                    const posePosition = new THREE.Vector3();
+                    const poseRotation = new THREE.Quaternion();
+                    const poseScale = new THREE.Vector3();
+                    const poseMatrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+                    poseMatrix.decompose(posePosition, poseRotation, poseScale);
+                    
+                    // Store the physical pose coordinates
+                    previewModel.userData.physicalPosition = posePosition.clone();
+                    previewModel.userData.physicalRotation = poseRotation.clone();
+
+                    // Apply the rigScale to the position
+                    previewModel.position.copy(posePosition).multiplyScalar(rigScale);
+                    previewModel.quaternion.copy(poseRotation);
+
+                    // Set scale from currentScaleMatrix (auto-fit scale)
+                    const modelScale = new THREE.Vector3();
+                    const modelRot = new THREE.Quaternion();
+                    const modelPos = new THREE.Vector3();
+                    currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
+                    previewModel.scale.copy(modelScale);
                 }
             } else {
                 previewModel.visible = false;

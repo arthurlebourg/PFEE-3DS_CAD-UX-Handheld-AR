@@ -12,10 +12,18 @@ export class UIManager {
     private btnPerf = document.createElement('button');
     private selectModel = document.createElement('select');
 
+    // Scale controls
+    private sliderContainer = document.createElement('div');
+    private sliderHeader = document.createElement('div');
+    private sliderLabel = document.createElement('span');
+    private sliderValText = document.createElement('span');
+    private sliderInput = document.createElement('input');
+
     private onModeCallback: (isPlacement: boolean) => void;
     private onDebugCallback: (showColors: boolean) => void;
     private onModelCallback: (modelName: string) => void;
     private onPerfCallback: (showPerf: boolean) => void;
+    private onScaleCallback: (rigScale: number) => void;
 
     /**
      * Initializes the UI buttons and their event listeners.
@@ -25,12 +33,14 @@ export class UIManager {
         onDebugCallback: (d: boolean) => void,
         onModelCallback: (m: string) => void,
         onPerfCallback: (s: boolean) => void,
+        onScaleCallback: (scale: number) => void,
         models: string[]
     ) {
         this.onModeCallback = onModeCallback;
         this.onDebugCallback = onDebugCallback;
         this.onModelCallback = onModelCallback;
         this.onPerfCallback = onPerfCallback;
+        this.onScaleCallback = onScaleCallback;
 
         this.container.style.cssText = 'position:absolute;bottom:120px;left:50%;transform:translateX(-50%);z-index:100;display:none;flex-direction:column;gap:10px;';
         
@@ -40,13 +50,30 @@ export class UIManager {
         this.btnPerf.style.cssText = style;
 
         this.selectModel.style.cssText = 'padding:12px;font-size:16px;border-radius:8px;border:none;pointer-events:auto;background:white;color:black;font-weight:bold;';
-        
+
         for (const model of models) {
             const option = document.createElement('option');
             option.value = model;
             option.textContent = model.replace('.glb', '').replace(/_/g, ' ').toUpperCase();
             this.selectModel.appendChild(option);
         }
+
+        // Setup slider with minimal styling
+        this.sliderContainer.style.cssText = 'display:flex;flex-direction:column;gap:5px;pointer-events:auto;background:rgba(0,0,0,0.6);padding:10px;border-radius:8px;color:white;font-family:sans-serif;font-size:14px;';
+        this.sliderHeader.style.cssText = 'display:flex;justify-content:space-between;font-weight:bold;';
+        
+        this.sliderLabel.textContent = 'Échelle Perçue';
+        this.sliderValText.textContent = '100%';
+        this.sliderHeader.append(this.sliderLabel, this.sliderValText);
+
+        this.sliderInput.type = 'range';
+        this.sliderInput.min = '10';
+        this.sliderInput.max = '1000';
+        this.sliderInput.value = '100';
+        this.sliderInput.step = '10';
+        this.sliderInput.style.cssText = 'width:100%;cursor:pointer;';
+
+        this.sliderContainer.append(this.sliderHeader, this.sliderInput);
 
         this.btnMode.addEventListener('touchstart', (event) => this.toggleMode(event));
         this.btnMode.addEventListener('click', (event) => this.toggleMode(event));
@@ -62,6 +89,16 @@ export class UIManager {
             this.onModelCallback(this.selectModel.value);
         });
 
+        this.sliderInput.addEventListener('input', (event) => {
+            event.stopPropagation();
+            const perceivedPercent = parseInt(this.sliderInput.value);
+            this.sliderValText.textContent = `${perceivedPercent}%`;
+            
+            // rigScale = 100 / perceivedPercent
+            const rigScale = 100 / perceivedPercent;
+            this.onScaleCallback(rigScale);
+        });
+
         // In a dom-overlay XR session, a tap on an overlay element still emits an
         // XR 'select' event (which would place/pick) unless we cancel the
         // beforexrselect the browser dispatches first. It bubbles, so one
@@ -69,7 +106,8 @@ export class UIManager {
         this.container.addEventListener('beforexrselect', (event) => event.preventDefault());
 
         this.updateUI();
-        this.container.append(this.selectModel, this.btnMode, this.btnDebug, this.btnPerf);
+
+        this.container.append(this.selectModel, this.sliderContainer, this.btnMode, this.btnDebug, this.btnPerf);
     }
 
     /**
@@ -121,6 +159,15 @@ export class UIManager {
     }
 
     /**
+     * Programmatically sets the scale value displayed in the UI.
+     */
+    public setScale(rigScale: number) {
+        const perceivedPercent = Math.round(100 / rigScale);
+        this.sliderInput.value = perceivedPercent.toString();
+        this.sliderValText.textContent = `${perceivedPercent}%`;
+    }
+
+    /**
      * Updates the visual appearance (text and color) of the buttons.
      */
     private updateUI() {
@@ -160,6 +207,7 @@ export class UIManager {
             this.isPlacementMode = true;
             this.showPickingColors = false;
             this.showPerf = false;
+            this.setScale(1.0);
             this.updateUI();
         }
     }
