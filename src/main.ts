@@ -30,10 +30,11 @@ let previewModel: THREE.Object3D | null = null;
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
 
+let devTick: (() => void) | null = null;
+
 let uiManager: UIManager;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
-let devTick: (() => void) | null = null;
 
 init();
 
@@ -47,11 +48,15 @@ function init(): void {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
+    // No MSAA: the full-resolution resolve every frame is a major fill cost on
+    // mobile, and WebXR applies its own AA to the composited layer.
     renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setAnimationLoop(animate);
     renderer.xr.enabled = !isDevMode;
+    // setPixelRatio does not control the XR render resolution; the XR layer does.
+    // At full device DPR the app is fill-bound, so shade fewer fragments.
     renderer.xr.setFramebufferScaleFactor(0.7);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -83,9 +88,6 @@ function init(): void {
         },
         (showPerf) => {
             perf.setVisible(showPerf);
-        },
-        (useRaycast) => {
-            // callback pick mode — branché sur UIManager
         },
         availableModels
     );
@@ -138,7 +140,7 @@ function loadModel(modelName: string): void {
         const size = new THREE.Vector3();
         box.getSize(size);
         const maxDim = Math.max(size.x, size.y, size.z);
-        const targetSize = 0.3;
+        const targetSize = 0.3; // 30 cm
         const scale = maxDim > 0 ? targetSize / maxDim : 1;
         currentScaleMatrix.makeScale(scale, scale, scale);
 
@@ -165,6 +167,7 @@ function loadModel(modelName: string): void {
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
+    // In placement mode a tap only ever places a model; picking is disabled.
     if (uiManager.isPlacementMode) {
         if (previewModel?.visible && loadedModel) {
             placeModel();
@@ -172,9 +175,7 @@ function onSelect(inputSource?: XRInputSource): void {
         return;
     }
 
-    const pickedMesh = uiManager.usePickRaycast
-        ? pickHelper.pickXRRaycast(inputSource, renderer, perf)
-        : pickHelper.pickXR(inputSource, renderer, scene, perf);
+    const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
 
     if (pickedMesh) {
         pickHelper.handleMeshSelection(pickedMesh, camera);
@@ -234,6 +235,7 @@ function onWindowResize(): void {
 
 /**
  * Main animation loop called every frame by the WebXR engine.
+ * Handles AR hit testing, moving parts, and rendering the final scene.
  */
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
