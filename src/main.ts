@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { isDevMode, setupDevMode } from './devMode';
+import { isDevMode, setupDevMode } from './devMode.js';
 
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
@@ -33,19 +33,7 @@ let hitTestSourceRequested = false;
 let uiManager: UIManager;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
-renderer.xr.enabled =  !isDevMode;  
 let devTick: (() => void) | null = null;
-
-if (isDevMode) {
-  devTick = setupDevMode(scene, camera, renderer);
-} else {
-  document.body.appendChild(ARButton.createButton(renderer));
-}
-const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-const material = new THREE.MeshNormalMaterial();
-const cube = new THREE.Mesh(geometry, material);
-cube.position.set(0, 1.5, -2);
-scene.add(cube);
 
 init();
 
@@ -59,15 +47,11 @@ function init(): void {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-    // No MSAA: the full-resolution resolve every frame is a major fill cost on
-    // mobile, and WebXR applies its own AA to the composited layer.
     renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setAnimationLoop(animate);
-    renderer.xr.enabled = true;
-    // setPixelRatio does not control the XR render resolution; the XR layer does.
-    // At full device DPR the app is fill-bound, so shade fewer fragments.
+    renderer.xr.enabled = !isDevMode;
     renderer.xr.setFramebufferScaleFactor(0.7);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -93,34 +77,39 @@ function init(): void {
                 previewModel.visible = false;
             }
         },
-        () => {
-        },
+        () => {},
         (modelName) => {
             loadModel(modelName);
         },
         (showPerf) => {
             perf.setVisible(showPerf);
         },
+        (useRaycast) => {
+            // callback pick mode — branché sur UIManager
+        },
         availableModels
     );
-    
+
     uiManager.attach(document.body);
 
-    const arButtonOptions = {
-        requiredFeatures: ['hit-test'],
-        optionalFeatures: ['dom-overlay'],
-        domOverlay: { root: document.body }
-    };
-    document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
+    if (isDevMode) {
+        devTick = setupDevMode(scene, camera, renderer, uiManager);
+    } else {
+        const arButtonOptions = {
+            requiredFeatures: ['hit-test'],
+            optionalFeatures: ['dom-overlay'],
+            domOverlay: { root: document.body }
+        };
+        document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
 
-    renderer.xr.addEventListener('sessionstart', () => {
-        uiManager.toggleVisibility(true);
-    });
-    renderer.xr.addEventListener('sessionend', () => {
-        uiManager.toggleVisibility(false);
-        perf.setVisible(false);
-    });
-
+        renderer.xr.addEventListener('sessionstart', () => {
+            uiManager.toggleVisibility(true);
+        });
+        renderer.xr.addEventListener('sessionend', () => {
+            uiManager.toggleVisibility(false);
+            perf.setVisible(false);
+        });
+    }
 
     if (availableModels.length > 0) {
         loadModel(availableModels[0]);
@@ -149,10 +138,10 @@ function loadModel(modelName: string): void {
         const size = new THREE.Vector3();
         box.getSize(size);
         const maxDim = Math.max(size.x, size.y, size.z);
-        const targetSize = 0.3; // 30 cm
+        const targetSize = 0.3;
         const scale = maxDim > 0 ? targetSize / maxDim : 1;
         currentScaleMatrix.makeScale(scale, scale, scale);
-        
+
         loadedModel.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) return;
             const mesh = child as THREE.Mesh;
@@ -163,7 +152,7 @@ function loadModel(modelName: string): void {
 
         previewModel = createPreview(loadedModel);
         scene.add(previewModel);
-        
+
         if (uiManager) {
             uiManager.forcePlacementMode(true);
         }
@@ -176,7 +165,6 @@ function loadModel(modelName: string): void {
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
-    // In placement mode a tap only ever places a model; picking is disabled.
     if (uiManager.isPlacementMode) {
         if (previewModel?.visible && loadedModel) {
             placeModel();
@@ -184,7 +172,9 @@ function onSelect(inputSource?: XRInputSource): void {
         return;
     }
 
-    const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
+    const pickedMesh = uiManager.usePickRaycast
+        ? pickHelper.pickXRRaycast(inputSource, renderer, perf)
+        : pickHelper.pickXR(inputSource, renderer, scene, perf);
 
     if (pickedMesh) {
         pickHelper.handleMeshSelection(pickedMesh, camera);
@@ -244,10 +234,10 @@ function onWindowResize(): void {
 
 /**
  * Main animation loop called every frame by the WebXR engine.
- * Handles AR hit testing, moving parts, and rendering the final scene.
  */
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
+    devTick?.();
 
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
