@@ -97,9 +97,9 @@ function init(): void {
     uiManager.attach(document.body);
     sceneRotator = new SceneRotator();
 
-    virtualJoycon = new VirtualJoycon((deltaX) => {
-    const speed = 0.01;
-    sceneRotator.rotateAroundCenter(placedModels, deltaX * speed);
+    virtualJoycon = new VirtualJoycon((direction) => {
+    const speed = 0.02;
+    sceneRotator.rotateAroundCenter(placedModels, direction * speed);
     });
 
     virtualJoycon.attach(document.body);
@@ -173,6 +173,8 @@ function loadModel(modelName: string): void {
  */
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
+
+    if (virtualJoycon.consumeTap()) return;
 
     // In placement mode a tap only ever places a model; picking is disabled.
     if (uiManager.isPlacementMode) {
