@@ -1,34 +1,63 @@
 import * as THREE from 'three';
 
 export class SceneRotator {
-  private center = new THREE.Vector3();
-  private axis = new THREE.Vector3(0, 1, 0);
+  private baseReferenceSpace: XRReferenceSpace | null = null;
+  private angle = 0;
 
-  public rotateAroundCenter(objects: THREE.Object3D[], angle: number) {
+  public captureBaseReferenceSpace(renderer: THREE.WebGLRenderer) {
+    this.baseReferenceSpace = renderer.xr.getReferenceSpace();
+  }
+
+  public rotateAroundCenter(
+    renderer: THREE.WebGLRenderer,
+    objects: THREE.Object3D[],
+    deltaAngle: number,
+  ) {
+    if (!this.baseReferenceSpace) return;
     if (objects.length === 0) return;
 
-    this.computeCenter(objects);
+    this.angle += deltaAngle;
 
-    const rotation = new THREE.Quaternion().setFromAxisAngle(this.axis, angle);
+    const center = this.computeCenter(objects);
 
-    for (const object of objects) {
-      const offset = object.position.clone().sub(this.center);
-      offset.applyQuaternion(rotation);
+    const rotation = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      this.angle,
+    );
 
-      object.position.copy(this.center).add(offset);
-      object.quaternion.premultiply(rotation);
+    const inverseRotation = rotation.clone().invert();
 
-      object.updateMatrixWorld(true);
-    }
+    const rotatedCenter = center.clone().applyQuaternion(inverseRotation);
+    const translation = center.clone().sub(rotatedCenter);
+
+    const transform = new XRRigidTransform(
+      {
+        x: translation.x,
+        y: translation.y,
+        z: translation.z,
+      },
+      {
+        x: inverseRotation.x,
+        y: inverseRotation.y,
+        z: inverseRotation.z,
+        w: inverseRotation.w,
+      },
+    );
+
+    const offsetReferenceSpace =
+      this.baseReferenceSpace.getOffsetReferenceSpace(transform);
+
+    renderer.xr.setReferenceSpace(offsetReferenceSpace);
   }
 
   private computeCenter(objects: THREE.Object3D[]) {
-    this.center.set(0, 0, 0);
+    const center = new THREE.Vector3();
 
     for (const object of objects) {
-      this.center.add(object.position);
+      center.add(object.position);
     }
 
-    this.center.divideScalar(objects.length);
+    center.divideScalar(objects.length);
+    return center;
   }
 }

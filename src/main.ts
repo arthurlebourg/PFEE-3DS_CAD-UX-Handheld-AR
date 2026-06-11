@@ -97,9 +97,17 @@ function init(): void {
     uiManager.attach(document.body);
     sceneRotator = new SceneRotator();
 
-    virtualJoycon = new VirtualJoycon((direction) => {
-    const speed = 0.04;
-    sceneRotator.rotateAroundCenter(placedModels, direction * speed);
+    renderer.xr.addEventListener('sessionstart', () => {
+    sceneRotator.captureBaseReferenceSpace(renderer);
+    });
+
+    virtualJoycon = new VirtualJoycon((strength) => {
+    const maxSpeed = 0.06;
+    sceneRotator.rotateAroundCenter(
+        renderer,
+        placedModels,
+        strength * maxSpeed,
+    );
     });
 
     virtualJoycon.attach(document.body);
