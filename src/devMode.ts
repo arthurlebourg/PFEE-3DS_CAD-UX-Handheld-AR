@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { UIManager } from './ui.js';
 
 const params = new URLSearchParams(window.location.search);
 const DEV_TOKEN = import.meta.env.VITE_DEV_TOKEN as string;
@@ -15,7 +16,8 @@ if (isDevMode) {
 export function setupDevMode(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
-  renderer: THREE.WebGLRenderer
+  renderer: THREE.WebGLRenderer,
+  uiManager: UIManager
 ): () => void {
   scene.add(new THREE.AxesHelper(1));
   scene.add(new THREE.GridHelper(10, 10));
@@ -23,6 +25,12 @@ export function setupDevMode(
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 1.5, -2);
   controls.update();
+
+  // No XR session fires 'sessionstart' in dev mode, so surface the in-app UI
+  // (model picker, debug/perf toggles) directly. Selection mode is the useful
+  // default here since placement relies on AR hit-testing.
+  uiManager.toggleVisibility(true);
+  uiManager.forcePlacementMode(false);
 
   const hud = document.createElement('div');
   hud.style.cssText = `

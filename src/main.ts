@@ -26,6 +26,7 @@ let controller2: THREE.XRTargetRaySpace;
 
 let loadedModel: THREE.Object3D | null = null;
 let previewModel: THREE.Object3D | null = null;
+let devModel: THREE.Object3D | null = null;
 
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
@@ -155,7 +156,19 @@ function loadModel(modelName: string): void {
         previewModel = createPreview(loadedModel);
         scene.add(previewModel);
 
-        if (uiManager) {
+        if (isDevMode) {
+            // No AR hit-testing in dev mode: drop the model on the orbit target
+            // so it is immediately visible and pickable.
+            if (devModel) {
+                scene.remove(devModel);
+                pickHelper.removeModel(devModel);
+            }
+            devModel = loadedModel.clone();
+            devModel.applyMatrix4(currentScaleMatrix);
+            devModel.position.set(0, 1.5, -2);
+            scene.add(devModel);
+            pickHelper.registerModel(devModel);
+        } else if (uiManager) {
             uiManager.forcePlacementMode(true);
         }
     });

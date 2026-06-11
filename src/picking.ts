@@ -85,6 +85,26 @@ export class PickHelper {
     }
 
     /**
+     * Unregisters every sub-mesh of a model: clears it from the id map, drops any
+     * selection/attachment state, and disposes the cached pick material.
+     */
+    public removeModel(model: THREE.Object3D): void {
+        model.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) {
+                return;
+            }
+            for (const [id, mesh] of this.idToMeshMap) {
+                if (mesh === child) {
+                    this.idToMeshMap.delete(id);
+                }
+            }
+            this.selectedMeshes = this.selectedMeshes.filter((m) => m !== child);
+            this.attachedParts = this.attachedParts.filter((p) => p.mesh !== child);
+            (child.userData.pickMaterial as THREE.Material | undefined)?.dispose();
+        });
+    }
+
+    /**
      * Smoothly updates the position of all attached parts to follow the camera.
      */
     public updateAttachedMeshes(camera: THREE.Camera) {
