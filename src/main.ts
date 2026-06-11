@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { isDevMode, setupDevMode } from './devMode';
 
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
@@ -32,6 +33,19 @@ let hitTestSourceRequested = false;
 let uiManager: UIManager;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
+renderer.xr.enabled =  !isDevMode;  
+let devTick: (() => void) | null = null;
+
+if (isDevMode) {
+  devTick = setupDevMode(scene, camera, renderer);
+} else {
+  document.body.appendChild(ARButton.createButton(renderer));
+}
+const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+const material = new THREE.MeshNormalMaterial();
+const cube = new THREE.Mesh(geometry, material);
+cube.position.set(0, 1.5, -2);
+scene.add(cube);
 
 init();
 
