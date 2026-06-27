@@ -90,7 +90,8 @@ function init(): void {
         (showPerf) => {
             perf.setVisible(showPerf);
         },
-        availableModels
+        availableModels,
+        isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
     );
 
     uiManager.attach(document.body);
