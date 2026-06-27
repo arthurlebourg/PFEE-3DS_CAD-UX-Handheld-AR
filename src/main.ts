@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { isDevMode, setupDevMode } from './devMode.js';
 
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
@@ -31,9 +32,12 @@ const placedModels: THREE.Object3D[] = [];
 
 let loadedModel: THREE.Object3D | null = null;
 let previewModel: THREE.Object3D | null = null;
+let devModel: THREE.Object3D | null = null;
 
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
+
+let devTick: (() => void) | null = null;
 
 let uiManager: UIManager;
 let virtualJoycon: VirtualJoycon;
@@ -64,7 +68,7 @@ function init(): void {
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setAnimationLoop(animate);
-    renderer.xr.enabled = true;
+    renderer.xr.enabled = !isDevMode;
     // setPixelRatio does not control the XR render resolution; the XR layer does.
     // At full device DPR the app is fill-bound, so shade fewer fragments.
     renderer.xr.setFramebufferScaleFactor(0.7);
@@ -92,8 +96,7 @@ function init(): void {
                 previewModel.visible = false;
             }
         },
-        () => {
-        },
+        () => {},
         (modelName) => {
             loadModel(modelName);
         },
@@ -103,9 +106,10 @@ function init(): void {
         (scale) => {
             updateRigScale(scale);
         },
-        availableModels
+        availableModels,
+        isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
     );
-    
+
     uiManager.attach(document.body);
     sceneRotator = new SceneRotator();
 
@@ -121,24 +125,24 @@ function init(): void {
 
     virtualJoycon.attach(document.body);
 
-    const arButtonOptions = {
-        requiredFeatures: ['hit-test'],
-        optionalFeatures: ['dom-overlay'],
-        domOverlay: { root: document.body }
-    };
-    document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
+    if (isDevMode) {
+        devTick = setupDevMode(scene, camera, renderer, uiManager);
+    } else {
+        const arButtonOptions = {
+            requiredFeatures: ['hit-test'],
+            optionalFeatures: ['dom-overlay'],
+            domOverlay: { root: document.body }
+        };
+        document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
 
-    renderer.xr.addEventListener('sessionstart', () => {
-        uiManager.toggleVisibility(true);
-    });
-    renderer.xr.addEventListener('sessionend', () => {
-        uiManager.toggleVisibility(false);
-        perf.setVisible(false);
-
-        sceneRotator.reset(xrRig);
-        updateRigScale(1.0);
-    });
-
+        renderer.xr.addEventListener('sessionstart', () => {
+            uiManager.toggleVisibility(true);
+        });
+        renderer.xr.addEventListener('sessionend', () => {
+            uiManager.toggleVisibility(false);
+            perf.setVisible(false);
+        });
+    }
 
     if (availableModels.length > 0) {
         loadModel(availableModels[0]);
@@ -162,7 +166,15 @@ function loadModel(modelName: string): void {
     const loader = new GLTFLoader();
     loader.load(url, (gltf) => {
         loadedModel = gltf.scene;
-        
+
+        const box = new THREE.Box3().setFromObject(loadedModel);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const targetSize = 0.3; // 30 cm
+        const scale = maxDim > 0 ? targetSize / maxDim : 1;
+        currentScaleMatrix.makeScale(scale, scale, scale);
+
         loadedModel.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) return;
             const mesh = child as THREE.Mesh;
@@ -173,8 +185,20 @@ function loadModel(modelName: string): void {
 
         previewModel = createPreview(loadedModel);
         scene.add(previewModel);
-        
-        if (uiManager) {
+
+        if (isDevMode) {
+            // No AR hit-testing in dev mode: drop the model on the orbit target
+            // so it is immediately visible and pickable.
+            if (devModel) {
+                scene.remove(devModel);
+                pickHelper.removeModel(devModel);
+            }
+            devModel = loadedModel.clone();
+            devModel.applyMatrix4(currentScaleMatrix);
+            devModel.position.set(0, 1.5, -2);
+            scene.add(devModel);
+            pickHelper.registerModel(devModel);
+        } else if (uiManager) {
             uiManager.forcePlacementMode(true);
         }
     });
@@ -298,6 +322,7 @@ function onWindowResize(): void {
  */
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
+    devTick?.();
 
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
