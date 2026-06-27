@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, MousePointer, Eye, Activity } from 'lucide';
+import { createIcons, Settings, Layers, MousePointer, Eye, Activity, Trash2 } from 'lucide';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
@@ -19,6 +19,7 @@ export class UIManager {
     private btnMode = document.createElement('button');
     private btnDebug: HTMLButtonElement | null = null;
     private btnPerf: HTMLButtonElement | null = null;
+    private btnDelete = document.createElement('button');
     private modelSelectionPanel = document.createElement('div');
 
     private isOpen = false;
@@ -38,6 +39,7 @@ export class UIManager {
     private onModelCallback: (modelName: string) => void;
     private onPerfCallback: (showPerf: boolean) => void;
     private onScaleCallback: (rigScale: number) => void;
+    private onDeleteCallback: () => void;
 
     constructor(
         onModeCallback: (p: boolean) => void,
@@ -45,6 +47,7 @@ export class UIManager {
         onModelCallback: (m: string) => void,
         onPerfCallback: (s: boolean) => void,
         onScaleCallback: (scale: number) => void,
+        onDeleteCallback: () => void,
         models: string[],
         isDevMode = false
     ) {
@@ -53,6 +56,7 @@ export class UIManager {
         this.onModelCallback = onModelCallback;
         this.onPerfCallback = onPerfCallback;
         this.onScaleCallback = onScaleCallback;
+        this.onDeleteCallback = onDeleteCallback;
         this.isDevMode = isDevMode;
 
         this.injectStyles();
@@ -68,6 +72,10 @@ export class UIManager {
         // Prod buttons — always present
         this.btnModel = this.createRadialButton('btn-model', 'layers',        'Modèles');
         this.btnMode  = this.createRadialButton('btn-mode',  'mouse-pointer', 'Mode: Placer');
+
+        // Delete button
+        this.btnDelete.className = 'ar-delete-btn';
+        this.btnDelete.innerHTML = `<i data-lucide="trash-2"></i><span class="ar-delete-label">Supprimer le modèle</span>`;
 
         // Dev-only buttons
         if (isDevMode) {
@@ -121,12 +129,14 @@ export class UIManager {
         this.addPointerDownListener(this.btnGear,  () => this.toggleGear());
         this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
         this.addPointerDownListener(this.btnMode,  () => this.toggleMode());
+        this.addPointerDownListener(this.btnDelete, () => this.onDeleteCallback());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
         // Prevent XR select events from bubbling through the overlay
         this.container.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.modelSelectionPanel.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.btnDelete.addEventListener('beforexrselect', (e) => e.preventDefault());
 
         this.updateUI();
 
@@ -143,10 +153,18 @@ export class UIManager {
     public attach(parent: HTMLElement): void {
         parent.appendChild(this.container);
         parent.appendChild(this.modelSelectionPanel);
+        parent.appendChild(this.btnDelete);
 
         createIcons({
-            icons: { Settings, Layers, MousePointer, Eye, Activity }
+            icons: { Settings, Layers, MousePointer, Eye, Activity, Trash2 }
         });
+    }
+
+    /**
+     * Shows or hides the floating delete button.
+     */
+    public setDeleteButtonVisible(visible: boolean): void {
+        this.btnDelete.classList.toggle('visible', visible);
     }
 
     // -------------------------------------------------------------------------
@@ -178,6 +196,7 @@ export class UIManager {
             this.showPickingColors = false;
             this.showPerf = false;
             this.setScale(1.0);
+            this.btnDelete.classList.remove('visible');
             this.updateUI();
         }
     }
@@ -514,6 +533,75 @@ export class UIManager {
             }
 
             .ar-model-card.active svg { opacity: 1; stroke: #007bff; }
+
+            .ar-delete-btn {
+                position: absolute;
+                bottom: 30px;
+                left: 30px;
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                border: 1px solid rgba(220, 53, 69, 0.4);
+                background: rgba(220, 53, 69, 0.25);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                color: #ff4a5a;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                box-shadow: 0 8px 32px 0 rgba(220, 53, 69, 0.2);
+                z-index: 1000;
+                opacity: 0;
+                transform: scale(0);
+                pointer-events: none;
+                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                outline: none;
+                padding: 0;
+            }
+
+            .ar-delete-btn.visible {
+                opacity: 1;
+                transform: scale(1);
+                pointer-events: auto;
+            }
+
+            .ar-delete-btn:active {
+                transform: scale(0.9);
+                background: rgba(220, 53, 69, 0.4);
+                box-shadow: 0 0 15px rgba(220, 53, 69, 0.5);
+            }
+
+            .ar-delete-btn svg {
+                width: 24px;
+                height: 24px;
+                stroke: currentColor;
+            }
+
+            .ar-delete-label {
+                position: absolute;
+                left: 70px;
+                top: 50%;
+                transform: translateY(-50%) scale(0.8);
+                background: rgba(220, 53, 69, 0.85);
+                border: 1px solid rgba(220, 53, 69, 0.4);
+                color: #fff;
+                padding: 5px 10px;
+                border-radius: 6px;
+                font-size: 11px;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-weight: 600;
+                white-space: nowrap;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.3s, transform 0.3s;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            }
+
+            .ar-delete-btn.visible .ar-delete-label {
+                opacity: 1;
+                transform: translateY(-50%) scale(1);
+            }
         `;
         document.head.appendChild(style);
     }

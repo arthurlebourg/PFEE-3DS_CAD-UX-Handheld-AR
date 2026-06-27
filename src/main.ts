@@ -14,7 +14,7 @@ const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url'
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
-    modelUrls[filename] = modules[path];
+    modelUrls[filename] = modules[path] as string;
 }
 const availableModels = Object.keys(modelUrls);
 
@@ -101,6 +101,10 @@ function init(): void {
             if (!isPlacement && previewModel) {
                 previewModel.visible = false;
             }
+            if (pickHelper) {
+                pickHelper.clearSelection();
+            }
+            uiManager.setDeleteButtonVisible(false);
         },
         () => {},
         (modelName) => {
@@ -111,6 +115,9 @@ function init(): void {
         },
         (scale) => {
             updateRigScale(scale);
+        },
+        () => {
+            deleteSelectedModel();
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
@@ -235,6 +242,8 @@ function onSelect(inputSource?: XRInputSource): void {
     } else if (pickHelper.selectedMeshes.length > 0) {
         pickHelper.clearSelection();
     }
+
+    uiManager.setDeleteButtonVisible(pickHelper.selectedMeshes.length > 0);
 }
 
 /**
@@ -268,6 +277,7 @@ function updateRigScale(newScale: number): void {
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
         pickHelper.clearSelection();
+        uiManager.setDeleteButtonVisible(false);
     }
 }
 
@@ -289,6 +299,55 @@ function placeModel(): void {
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
+    sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Finds the root placed model group containing a given child.
+ */
+function findRootPlacedModel(object: THREE.Object3D): THREE.Object3D | null {
+    let curr: THREE.Object3D | null = object;
+    while (curr) {
+        if (placedModels.includes(curr) || curr === devModel) {
+            return curr;
+        }
+        curr = curr.parent;
+    }
+    return null;
+}
+
+/**
+ * Instantly deletes the model containing the currently selected parts from the scene.
+ */
+function deleteSelectedModel(): void {
+    if (pickHelper.selectedMeshes.length === 0) return;
+
+    const modelsToDelete = new Set<THREE.Object3D>();
+    for (const mesh of pickHelper.selectedMeshes) {
+        const rootModel = findRootPlacedModel(mesh);
+        if (rootModel) {
+            modelsToDelete.add(rootModel);
+        }
+    }
+
+    if (modelsToDelete.size === 0) return;
+
+    pickHelper.clearSelection();
+
+    for (const model of modelsToDelete) {
+        pickHelper.removeModel(model);
+        scene.remove(model);
+
+        const index = placedModels.indexOf(model);
+        if (index !== -1) {
+            placedModels.splice(index, 1);
+        }
+        if (model === devModel) {
+            devModel = null;
+        }
+    }
+
+    uiManager.setDeleteButtonVisible(false);
     sceneRotator.refresh(xrRig, placedModels);
 }
 
