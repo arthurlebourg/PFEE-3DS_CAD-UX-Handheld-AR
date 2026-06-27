@@ -415,7 +415,7 @@ export class UIManager {
             .ar-scale-panel {
                 position: absolute;
                 right: 0;
-                bottom: 80px;
+                bottom: 190px;
                 width: 220px;
                 display: flex;
                 flex-direction: column;
@@ -467,7 +467,7 @@ export class UIManager {
                 backdrop-filter: blur(15px);
                 -webkit-backdrop-filter: blur(15px);
                 box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-                z-index: 900;
+                z-index: 1100;
                 opacity: 0;
                 pointer-events: none;
                 transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;

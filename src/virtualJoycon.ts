@@ -56,6 +56,11 @@ export class VirtualJoycon {
     parent.addEventListener('touchstart', (event) => {
       if (event.touches.length !== 1) return;
 
+      // Ignore touches that start on interactive UI (sliders, buttons, panels)
+      // so dragging them doesn't trigger the rotation joystick.
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.ar-menu-container, .ar-model-panel')) return;
+
       const touch = event.touches[0];
 
       this.startX = touch.clientX;
