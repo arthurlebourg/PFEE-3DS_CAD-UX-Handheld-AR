@@ -14,9 +14,15 @@ const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url'
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
-    modelUrls[filename] = modules[path] as string;
+    modelUrls[filename] = modules[path];
 }
 const availableModels = Object.keys(modelUrls);
+
+/** Physical (rig-independent) pose stored on a model's userData. */
+interface PhysicalPose {
+    physicalPosition?: THREE.Vector3;
+    physicalRotation?: THREE.Quaternion;
+}
 
 const currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
 let container: HTMLDivElement;
@@ -244,14 +250,16 @@ function updateRigScale(newScale: number): void {
     
     // Update all placed models' positions to remain anchored physically
     for (const model of placedModels) {
-        if (model.userData.physicalPosition) {
-            model.position.copy(model.userData.physicalPosition).multiplyScalar(rigScale);
+        const { physicalPosition } = model.userData as PhysicalPose;
+        if (physicalPosition) {
+            model.position.copy(physicalPosition).multiplyScalar(rigScale);
         }
     }
-    
+
     // Update preview model position
-    if (previewModel && previewModel.userData.physicalPosition) {
-        previewModel.position.copy(previewModel.userData.physicalPosition).multiplyScalar(rigScale);
+    const previewPose = previewModel?.userData as PhysicalPose | undefined;
+    if (previewModel && previewPose?.physicalPosition) {
+        previewModel.position.copy(previewPose.physicalPosition).multiplyScalar(rigScale);
     }
 
     // Since the scale changes the positions, we need to update the center of rotation
@@ -272,9 +280,10 @@ function placeModel(): void {
     const model = loadedModel.clone();
     previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
     
-    if (previewModel.userData.physicalPosition) {
-        model.userData.physicalPosition = previewModel.userData.physicalPosition.clone();
-        model.userData.physicalRotation = previewModel.userData.physicalRotation.clone();
+    const previewPose = previewModel.userData as PhysicalPose;
+    if (previewPose.physicalPosition && previewPose.physicalRotation) {
+        model.userData.physicalPosition = previewPose.physicalPosition.clone();
+        model.userData.physicalRotation = previewPose.physicalRotation.clone();
     }
     
     scene.add(model);
