@@ -38,7 +38,7 @@ let hitTestSourceRequested = false;
 let uiManager: UIManager;
 let virtualJoycon: VirtualJoycon;
 let sceneRotator: SceneRotator;
-const placedModels: THREE.Object3D[] = [];let pickHelper: PickHelper;
+let pickHelper: PickHelper;
 let perf: PerfProbe;
 
 init();
@@ -109,17 +109,14 @@ function init(): void {
     uiManager.attach(document.body);
     sceneRotator = new SceneRotator();
 
-    renderer.xr.addEventListener('sessionstart', () => {
-    sceneRotator.captureBaseReferenceSpace(renderer);
-    });
-
     virtualJoycon = new VirtualJoycon((strength) => {
-    const maxSpeed = 0.06;
-    sceneRotator.rotateAroundCenter(
-        renderer,
-        placedModels,
-        strength * maxSpeed,
-    );
+        const maxSpeed = 0.06;
+
+        sceneRotator.rotateAroundCenter(
+            xrRig,
+            placedModels,
+            strength * maxSpeed,
+        );
     });
 
     virtualJoycon.attach(document.body);
@@ -137,6 +134,9 @@ function init(): void {
     renderer.xr.addEventListener('sessionend', () => {
         uiManager.toggleVisibility(false);
         perf.setVisible(false);
+
+        sceneRotator.reset(xrRig);
+        updateRigScale(1.0);
     });
 
 
@@ -230,6 +230,9 @@ function updateRigScale(newScale: number): void {
         previewModel.position.copy(previewModel.userData.physicalPosition).multiplyScalar(rigScale);
     }
 
+    // Since the scale changes the positions, we need to update the center of rotation
+    sceneRotator.refresh(xrRig, placedModels);
+
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
         pickHelper.clearSelection();
@@ -253,6 +256,7 @@ function placeModel(): void {
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
+    sceneRotator.refresh(xrRig, placedModels);
 }
 
 /**
