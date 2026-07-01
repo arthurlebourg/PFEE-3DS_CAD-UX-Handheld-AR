@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, MousePointer, Eye, Activity, Trash2 } from 'lucide';
+import { createIcons, Settings, Layers, MousePointer, Eye, Activity, Trash2, RotateCcw } from 'lucide';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
@@ -20,6 +20,7 @@ export class UIManager {
     private btnDebug: HTMLButtonElement | null = null;
     private btnPerf: HTMLButtonElement | null = null;
     private btnDelete = document.createElement('button');
+    private btnReset = document.createElement('button');
     private modelSelectionPanel = document.createElement('div');
 
     private isOpen = false;
@@ -40,6 +41,7 @@ export class UIManager {
     private onPerfCallback: (showPerf: boolean) => void;
     private onScaleCallback: (rigScale: number) => void;
     private onDeleteCallback: () => void;
+    private onResetCallback: () => void;
 
     constructor(
         onModeCallback: (p: boolean) => void,
@@ -48,6 +50,7 @@ export class UIManager {
         onPerfCallback: (s: boolean) => void,
         onScaleCallback: (scale: number) => void,
         onDeleteCallback: () => void,
+        onResetCallback: () => void,
         models: string[],
         isDevMode = false
     ) {
@@ -57,6 +60,7 @@ export class UIManager {
         this.onPerfCallback = onPerfCallback;
         this.onScaleCallback = onScaleCallback;
         this.onDeleteCallback = onDeleteCallback;
+        this.onResetCallback = onResetCallback;
         this.isDevMode = isDevMode;
 
         this.injectStyles();
@@ -76,6 +80,10 @@ export class UIManager {
         // Delete button
         this.btnDelete.className = 'ar-delete-btn';
         this.btnDelete.innerHTML = `<i data-lucide="trash-2"></i><span class="ar-delete-label">Supprimer le modèle</span>`;
+
+        // Reset button
+        this.btnReset.className = 'ar-reset-btn';
+        this.btnReset.innerHTML = `<i data-lucide="rotate-ccw"></i><span class="ar-reset-label">Réinitialiser le modèle</span>`;
 
         // Dev-only buttons
         if (isDevMode) {
@@ -130,13 +138,15 @@ export class UIManager {
         this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
         this.addPointerDownListener(this.btnMode,  () => this.toggleMode());
         this.addPointerDownListener(this.btnDelete, () => this.onDeleteCallback());
+        this.addPointerDownListener(this.btnReset, () => this.onResetCallback());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
         // Prevent XR select events from bubbling through the overlay
-        this.container.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.modelSelectionPanel.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.btnDelete.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.container.addEventListener('beforexrselect', (e: Event) => e.preventDefault());
+        this.modelSelectionPanel.addEventListener('beforexrselect', (e: Event) => e.preventDefault());
+        this.btnDelete.addEventListener('beforexrselect', (e: Event) => e.preventDefault());
+        this.btnReset.addEventListener('beforexrselect', (e: Event) => e.preventDefault());
 
         this.updateUI();
 
@@ -154,9 +164,10 @@ export class UIManager {
         parent.appendChild(this.container);
         parent.appendChild(this.modelSelectionPanel);
         parent.appendChild(this.btnDelete);
+        parent.appendChild(this.btnReset);
 
         createIcons({
-            icons: { Settings, Layers, MousePointer, Eye, Activity, Trash2 }
+            icons: { Settings, Layers, MousePointer, Eye, Activity, Trash2, RotateCcw }
         });
     }
 
@@ -165,6 +176,13 @@ export class UIManager {
      */
     public setDeleteButtonVisible(visible: boolean): void {
         this.btnDelete.classList.toggle('visible', visible);
+    }
+
+    /**
+     * Shows or hides the floating reset button.
+     */
+    public setResetButtonVisible(visible: boolean): void {
+        this.btnReset.classList.toggle('visible', visible);
     }
 
     // -------------------------------------------------------------------------
@@ -197,6 +215,7 @@ export class UIManager {
             this.showPerf = false;
             this.setScale(1.0);
             this.btnDelete.classList.remove('visible');
+            this.btnReset.classList.remove('visible');
             this.updateUI();
         }
     }
@@ -599,6 +618,75 @@ export class UIManager {
             }
 
             .ar-delete-btn.visible .ar-delete-label {
+                opacity: 1;
+                transform: translateY(-50%) scale(1);
+            }
+
+            .ar-reset-btn {
+                position: absolute;
+                bottom: 105px;
+                left: 30px;
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                border: 1px solid rgba(0, 123, 255, 0.4);
+                background: rgba(0, 123, 255, 0.25);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                color: #38bdf8;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                box-shadow: 0 8px 32px 0 rgba(0, 123, 255, 0.2);
+                z-index: 1000;
+                opacity: 0;
+                transform: scale(0);
+                pointer-events: none;
+                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                outline: none;
+                padding: 0;
+            }
+
+            .ar-reset-btn.visible {
+                opacity: 1;
+                transform: scale(1);
+                pointer-events: auto;
+            }
+
+            .ar-reset-btn:active {
+                transform: scale(0.9);
+                background: rgba(0, 123, 255, 0.4);
+                box-shadow: 0 0 15px rgba(0, 123, 255, 0.5);
+            }
+
+            .ar-reset-btn svg {
+                width: 24px;
+                height: 24px;
+                stroke: currentColor;
+            }
+
+            .ar-reset-label {
+                position: absolute;
+                left: 70px;
+                top: 50%;
+                transform: translateY(-50%) scale(0.8);
+                background: rgba(0, 123, 255, 0.85);
+                border: 1px solid rgba(0, 123, 255, 0.4);
+                color: #fff;
+                padding: 5px 10px;
+                border-radius: 6px;
+                font-size: 11px;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-weight: 600;
+                white-space: nowrap;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.3s, transform 0.3s;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            }
+
+            .ar-reset-btn.visible .ar-reset-label {
                 opacity: 1;
                 transform: translateY(-50%) scale(1);
             }

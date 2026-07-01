@@ -105,6 +105,7 @@ function init(): void {
                 pickHelper.clearSelection();
             }
             uiManager.setDeleteButtonVisible(false);
+            uiManager.setResetButtonVisible(false);
         },
         () => {},
         (modelName) => {
@@ -118,6 +119,9 @@ function init(): void {
         },
         () => {
             deleteSelectedModel();
+        },
+        () => {
+            resetSelectedModel();
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
@@ -209,6 +213,12 @@ function loadModel(modelName: string): void {
             devModel = loadedModel.clone();
             devModel.applyMatrix4(currentScaleMatrix);
             devModel.position.set(0, 1.5, -2);
+
+            // Save original transforms for resetting
+            devModel.userData.originalPosition = devModel.position.clone();
+            devModel.userData.originalQuaternion = devModel.quaternion.clone();
+            devModel.userData.originalModelScale = devModel.scale.clone();
+
             scene.add(devModel);
             pickHelper.registerModel(devModel);
         } else if (uiManager) {
@@ -244,6 +254,7 @@ function onSelect(inputSource?: XRInputSource): void {
     }
 
     uiManager.setDeleteButtonVisible(pickHelper.selectedMeshes.length > 0);
+    uiManager.setResetButtonVisible(pickHelper.selectedMeshes.length > 0);
 }
 
 /**
@@ -278,6 +289,7 @@ function updateRigScale(newScale: number): void {
     if (pickHelper) {
         pickHelper.clearSelection();
         uiManager.setDeleteButtonVisible(false);
+        uiManager.setResetButtonVisible(false);
     }
 }
 
@@ -295,6 +307,9 @@ function placeModel(): void {
         model.userData.physicalPosition = previewPose.physicalPosition.clone();
         model.userData.physicalRotation = previewPose.physicalRotation.clone();
     }
+    
+    // Save original scale (including auto-fit scale)
+    model.userData.originalModelScale = model.scale.clone();
     
     scene.add(model);
     placedModels.push(model);
@@ -348,6 +363,68 @@ function deleteSelectedModel(): void {
     }
 
     uiManager.setDeleteButtonVisible(false);
+    sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Instantly resets the selected model's pose and reassembles all its parts.
+ */
+function resetSelectedModel(): void {
+    if (pickHelper.selectedMeshes.length === 0) return;
+
+    const modelsToReset = new Set<THREE.Object3D>();
+    for (const mesh of pickHelper.selectedMeshes) {
+        const rootModel = findRootPlacedModel(mesh);
+        if (rootModel) {
+            modelsToReset.add(rootModel);
+        }
+    }
+
+    if (modelsToReset.size === 0) return;
+
+    // Clear selection to restore materials and highlights
+    pickHelper.clearSelection();
+
+    for (const model of modelsToReset) {
+        // 1. Reset all sub-meshes (parts) local transforms to their original values
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                if (child.userData.originalPosition) {
+                    child.position.copy(child.userData.originalPosition as THREE.Vector3);
+                }
+                if (child.userData.originalQuaternion) {
+                    child.quaternion.copy(child.userData.originalQuaternion as THREE.Quaternion);
+                }
+                if (child.userData.originalScale) {
+                    child.scale.copy(child.userData.originalScale as THREE.Vector3);
+                }
+            }
+        });
+
+        // 2. Reset the overall model's position, rotation, and scale
+        if (model === devModel) {
+            if (model.userData.originalPosition) {
+                model.position.copy(model.userData.originalPosition as THREE.Vector3);
+            }
+            if (model.userData.originalQuaternion) {
+                model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
+            }
+        } else {
+            const previewPose = model.userData as PhysicalPose;
+            if (previewPose.physicalPosition && previewPose.physicalRotation) {
+                model.position.copy(previewPose.physicalPosition).multiplyScalar(rigScale);
+                model.quaternion.copy(previewPose.physicalRotation);
+            }
+        }
+
+        if (model.userData.originalModelScale) {
+            model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
+        }
+    }
+
+    // Hide buttons and refresh camera center of rotation
+    uiManager.setDeleteButtonVisible(false);
+    uiManager.setResetButtonVisible(false);
     sceneRotator.refresh(xrRig, placedModels);
 }
 
