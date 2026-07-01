@@ -6,6 +6,7 @@ import { isDevMode, setupDevMode } from './devMode.js';
 
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
+import { HierarchyPanel } from './hierarchy.js';
 import { PerfProbe } from './perf.js';
 import { VirtualJoycon } from './virtualJoycon.js';
 import { SceneRotator } from './sceneRotator.js';
@@ -14,7 +15,7 @@ const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url'
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
-    modelUrls[filename] = modules[path];
+    modelUrls[filename] = modules[path] as string;
 }
 const availableModels = Object.keys(modelUrls);
 
@@ -50,6 +51,7 @@ let virtualJoycon: VirtualJoycon;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
+let hierarchyPanel: HierarchyPanel;
 
 init();
 
@@ -96,6 +98,15 @@ function init(): void {
     perf = new PerfProbe({ visible: false });
     perf.mount(document.body);
 
+    hierarchyPanel = new HierarchyPanel((mesh) => {
+        if (pickHelper.selectedMeshes.includes(mesh)) {
+            pickHelper.deselectMesh(mesh);
+        } else {
+            pickHelper.handleMeshSelection(mesh, camera);
+        }
+        hierarchyPanel.syncSelection(pickHelper.selectedMeshes);
+    });
+
     uiManager = new UIManager(
         (isPlacement) => {
             if (!isPlacement && previewModel) {
@@ -112,11 +123,15 @@ function init(): void {
         (scale) => {
             updateRigScale(scale);
         },
+        (show) => {
+            hierarchyPanel.setVisible(show);
+        },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
     );
 
     uiManager.attach(document.body);
+    hierarchyPanel.attach(document.body);
     sceneRotator = new SceneRotator();
 
     virtualJoycon = new VirtualJoycon((strength) => {
@@ -204,6 +219,8 @@ function loadModel(modelName: string): void {
             devModel.position.set(0, 1.5, -2);
             scene.add(devModel);
             pickHelper.registerModel(devModel);
+            placedModels.push(devModel);
+            hierarchyPanel.refresh(placedModels);
         } else if (uiManager) {
             uiManager.forcePlacementMode(true);
         }
@@ -235,6 +252,7 @@ function onSelect(inputSource?: XRInputSource): void {
     } else if (pickHelper.selectedMeshes.length > 0) {
         pickHelper.clearSelection();
     }
+    hierarchyPanel.syncSelection(pickHelper.selectedMeshes);
 }
 
 /**
@@ -268,6 +286,7 @@ function updateRigScale(newScale: number): void {
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
         pickHelper.clearSelection();
+        hierarchyPanel.syncSelection([]);
     }
 }
 
@@ -290,6 +309,7 @@ function placeModel(): void {
     placedModels.push(model);
     pickHelper.registerModel(model);
     sceneRotator.refresh(xrRig, placedModels);
+    hierarchyPanel.refresh(placedModels);
 }
 
 /**
