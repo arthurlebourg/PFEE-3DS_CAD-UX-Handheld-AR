@@ -54,7 +54,12 @@ export class VirtualJoycon {
     });
 
     parent.addEventListener('touchstart', (event) => {
-      if (event.touches.length !== 1) return;
+      // A second finger (e.g. a two-finger explode pinch) cancels any pending
+      // or active press so rotation and explode don't fight over the touch.
+      if (event.touches.length !== 1) {
+        this.cancel();
+        return;
+      }
 
       // Ignore touches that start on interactive UI (sliders, buttons, panels)
       // so dragging them doesn't trigger the rotation joystick.
