@@ -262,6 +262,15 @@ export class PickHelper {
     }
 
     /**
+     * Removes a single mesh from the selection and restores its highlight.
+     */
+    public deselectMesh(mesh: THREE.Mesh): void {
+        this.removeHighlight(mesh);
+        this.selectedMeshes = this.selectedMeshes.filter((m) => m !== mesh);
+        this.attachedParts = this.attachedParts.filter((p) => p.mesh !== mesh);
+    }
+
+    /**
      * Drops all attached pieces and clears the current selection.
      */
     public clearSelection() {
