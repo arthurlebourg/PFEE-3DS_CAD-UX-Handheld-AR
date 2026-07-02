@@ -111,6 +111,7 @@ function init(): void {
         },
         (scale) => {
             updateRigScale(scale);
+        },
         () => {                        
         if (pickHelper.selectedMeshes.length > 0) {
                 pickHelper.hideSelected();
