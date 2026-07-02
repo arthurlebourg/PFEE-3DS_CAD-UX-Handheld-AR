@@ -1,4 +1,5 @@
 import { createIcons, Settings, Layers, MousePointer, Eye, Activity } from 'lucide';
+import { gestureArbiter, GestureType } from './gestureArbiter.js';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
@@ -107,6 +108,17 @@ export class UIManager {
             this.activeModelName = models[0];
         }
 
+        // Claim the Button precedence slot for the whole drag so a finger
+        // resting on the track can't also be read as a pinch/joystick touch
+        // by the document-level listeners underneath the overlay.
+        this.sliderInput.addEventListener('pointerdown', (event) => {
+            event.stopPropagation();
+            gestureArbiter.tryStart(GestureType.Button);
+        });
+        this.sliderInput.addEventListener('pointerup', () => {
+            gestureArbiter.end(GestureType.Button);
+        });
+
         this.sliderInput.addEventListener('input', (event) => {
             event.stopPropagation();
 
@@ -197,7 +209,13 @@ export class UIManager {
         element.addEventListener('pointerdown', (event) => {
             event.stopPropagation();
             event.preventDefault();
+
+            // Buttons sit at the top of the gesture precedence order, so this
+            // always succeeds and preempts anything mid-flight (e.g. a pinch
+            // or joystick drag that happened to be active).
+            gestureArbiter.tryStart(GestureType.Button);
             callback();
+            gestureArbiter.end(GestureType.Button);
         });
     }
 

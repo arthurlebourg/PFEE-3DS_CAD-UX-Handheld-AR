@@ -1,3 +1,5 @@
+import { gestureArbiter, GestureType } from './gestureArbiter.js';
+
 export class VirtualJoycon {
   private root = document.createElement('div');
   private stick = document.createElement('div');
@@ -54,6 +56,12 @@ export class VirtualJoycon {
     });
 
     parent.addEventListener('touchstart', (event) => {
+      if (event.touches.length >= 2) {
+        // A second finger just landed: yield to the pinch gesture instead
+        // of continuing/starting a one-finger rotation drag.
+        this.cancel();
+        return;
+      }
       if (event.touches.length !== 1) return;
 
       // Ignore touches that start on interactive UI (sliders, buttons, panels)
@@ -71,6 +79,10 @@ export class VirtualJoycon {
       this.wasUsed = false;
 
       this.pressTimer = window.setTimeout(() => {
+        // A button press or an already-active pinch outranks the joystick;
+        // don't spawn it on top of either.
+        if (!gestureArbiter.tryStart(GestureType.Joystick)) return;
+
         this.active = true;
         this.wasUsed = true;
         this.show(this.startX, this.startY);
@@ -173,5 +185,6 @@ export class VirtualJoycon {
     this.active = false;
     this.root.style.display = 'none';
     this.stick.style.transform = 'translate(-50%, -50%)';
+    gestureArbiter.end(GestureType.Joystick);
   }
 }
