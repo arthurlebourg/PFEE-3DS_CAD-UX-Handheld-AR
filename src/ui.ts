@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, MousePointer, Eye, Activity } from 'lucide';
+import { createIcons, Settings, Layers, MousePointer, Eye, EyeOff,  Activity } from 'lucide';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
@@ -17,6 +17,7 @@ export class UIManager {
     private btnGear = document.createElement('button');
     private btnModel = document.createElement('button');
     private btnMode = document.createElement('button');
+    private btnHide = document.createElement('button');
     private btnDebug: HTMLButtonElement | null = null;
     private btnPerf: HTMLButtonElement | null = null;
     private modelSelectionPanel = document.createElement('div');
@@ -39,12 +40,14 @@ export class UIManager {
     private onPerfCallback: (showPerf: boolean) => void;
     private onScaleCallback: (rigScale: number) => void;
 
+    private onHideCallback: () => void;
     constructor(
         onModeCallback: (p: boolean) => void,
         onDebugCallback: (d: boolean) => void,
         onModelCallback: (m: string) => void,
         onPerfCallback: (s: boolean) => void,
         onScaleCallback: (scale: number) => void,
+        onHideCallback: () => void, 
         models: string[],
         isDevMode = false
     ) {
@@ -68,7 +71,7 @@ export class UIManager {
         // Prod buttons — always present
         this.btnModel = this.createRadialButton('btn-model', 'layers',        'Modèles');
         this.btnMode  = this.createRadialButton('btn-mode',  'mouse-pointer', 'Mode: Placer');
-
+        this.btnHide = this.createRadialButton('btn-hide', 'eye-off', 'Masquer');
         // Dev-only buttons
         if (isDevMode) {
             this.btnDebug = this.createRadialButton('btn-debug', 'eye',      'Couleurs: OFF');
@@ -121,6 +124,7 @@ export class UIManager {
         this.addPointerDownListener(this.btnGear,  () => this.toggleGear());
         this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
         this.addPointerDownListener(this.btnMode,  () => this.toggleMode());
+        this.addPointerDownListener(this.btnHide, () => this.onHideCallback());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
@@ -145,7 +149,7 @@ export class UIManager {
         parent.appendChild(this.modelSelectionPanel);
 
         createIcons({
-            icons: { Settings, Layers, MousePointer, Eye, Activity }
+            icons: { Settings, Layers, MousePointer, Eye, EyeOff,  Activity }
         });
     }
 
@@ -303,10 +307,12 @@ export class UIManager {
         const prodPositions = `
             .ar-menu-container.open .btn-model { transform: translate(-115px, 0) scale(1); }
             .ar-menu-container.open .btn-mode  { transform: translate(-81.3px, -81.3px) scale(1); }
+            .ar-menu-container.open .btn-hide  { transform: translate(-57.5px, -99.6px) scale(1); }
         `;
         const devPositions = `
             .ar-menu-container.open .btn-model { transform: translate(-115px, 0) scale(1); }
             .ar-menu-container.open .btn-mode  { transform: translate(-99.6px, -57.5px) scale(1); }
+            .ar-menu-container.open .btn-hide  { transform: translate(-81.3px, -81.3px) scale(1); }
             .ar-menu-container.open .btn-debug { transform: translate(-57.5px, -99.6px) scale(1); }
             .ar-menu-container.open .btn-perf  { transform: translate(0, -115px) scale(1); }
         `;

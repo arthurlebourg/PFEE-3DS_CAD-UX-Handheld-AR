@@ -111,6 +111,12 @@ function init(): void {
         },
         (scale) => {
             updateRigScale(scale);
+        () => {                        
+        if (pickHelper.selectedMeshes.length > 0) {
+                pickHelper.hideSelected();
+            } else {
+                    pickHelper.showAll();
+                }
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement

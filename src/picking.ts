@@ -24,6 +24,22 @@ export class PickHelper {
 
     public selectedMeshes: THREE.Mesh[] = [];
     public attachedParts: AttachedPart[] = [];
+    public hiddenMeshes: THREE.Mesh[] = [];
+
+    public hideSelected(): void {
+        for (const mesh of this.selectedMeshes) {
+            mesh.visible = false;
+            this.hiddenMeshes.push(mesh);
+        }
+        this.clearSelection();
+    }
+
+    public showAll(): void {
+        for (const mesh of this.hiddenMeshes) {
+            mesh.visible = true;
+        }
+        this.hiddenMeshes = [];
+    }
 
     private idToMeshMap = new Map<number, THREE.Mesh>();
     private nextId = 1;
@@ -98,6 +114,7 @@ export class PickHelper {
                     this.idToMeshMap.delete(id);
                 }
             }
+            this.hiddenMeshes = this.hiddenMeshes.filter((m) => m !== child);   
             this.selectedMeshes = this.selectedMeshes.filter((m) => m !== child);
             this.attachedParts = this.attachedParts.filter((p) => p.mesh !== child);
             (child.userData.pickMaterial as THREE.Material | undefined)?.dispose();
