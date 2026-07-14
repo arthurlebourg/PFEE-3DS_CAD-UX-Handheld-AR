@@ -7,15 +7,18 @@ import { isDevMode, setupDevMode } from './devMode.js';
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
 import { PerfProbe } from './perf.js';
-import { VirtualJoycon } from './virtualJoycon.js';
-import { ExplodeController } from './explodeController.js';
+import { JoystickWidget } from './joystickWidget.js';
 import { SceneRotator } from './sceneRotator.js';
+import { GestureRecognizer } from './gestureRecognizer.js';
+import { ModeManager } from './modeManager.js';
+import { EditMode } from './editMode.js';
+import { InspectMode } from './inspectMode.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
-    modelUrls[filename] = modules[path];
+    modelUrls[filename] = modules[path] as string;
 }
 const availableModels = Object.keys(modelUrls);
 
@@ -47,11 +50,14 @@ let hitTestSourceRequested = false;
 let devTick: (() => void) | null = null;
 
 let uiManager: UIManager;
-let virtualJoycon: VirtualJoycon;
-let explodeController: ExplodeController;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
+
+let gestureRecognizer: GestureRecognizer;
+let modeManager: ModeManager;
+let editMode: EditMode;
+let inspectMode: InspectMode;
 
 init();
 
@@ -99,10 +105,8 @@ function init(): void {
     perf.mount(document.body);
 
     uiManager = new UIManager(
-        (isPlacement) => {
-            if (!isPlacement && previewModel) {
-                previewModel.visible = false;
-            }
+        () => {
+            modeManager.toggle();
         },
         () => {},
         (modelName) => {
@@ -111,9 +115,6 @@ function init(): void {
         (showPerf) => {
             perf.setVisible(showPerf);
         },
-        (scale) => {
-            updateRigScale(scale);
-        },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
     );
@@ -121,7 +122,7 @@ function init(): void {
     uiManager.attach(document.body);
     sceneRotator = new SceneRotator();
 
-    virtualJoycon = new VirtualJoycon((strength) => {
+    const joystick = new JoystickWidget((strength) => {
         const maxSpeed = 0.06;
 
         sceneRotator.rotateAroundCenter(
@@ -130,16 +131,46 @@ function init(): void {
             strength * maxSpeed,
         );
     });
+    joystick.attach(document.body);
 
-    virtualJoycon.attach(document.body);
-
-    explodeController = new ExplodeController((factor) => {
-        explode(factor);
+    editMode = new EditMode({
+        joystick,
+        placeModel: () => {
+            if (previewModel?.visible && loadedModel) {
+                placeModel();
+                return true;
+            }
+            return false;
+        },
+        onRigScale: (scale) => {
+            updateRigScale(scale);
+        },
     });
-    explodeController.attach(document.body);
+
+    inspectMode = new InspectMode({
+        pickHelper,
+        pickMesh: (inputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf),
+        getCamera: () => camera,
+        onExplode: (factor) => {
+            explode(factor);
+        },
+    });
+
+    modeManager = new ModeManager(editMode, inspectMode, (mode) => {
+        uiManager.setMode(mode);
+        if (mode === 'inspect' && previewModel) {
+            previewModel.visible = false;
+        }
+    });
+
+    gestureRecognizer = new GestureRecognizer(modeManager);
+    gestureRecognizer.attach(document.body);
 
     if (isDevMode) {
         devTick = setupDevMode(scene, camera, renderer, uiManager);
+        // No AR hit-testing in dev mode, so placement is useless: inspecting
+        // (picking, explode) is the relevant default.
+        modeManager.setMode('inspect');
     } else {
         const arButtonOptions = {
             requiredFeatures: ['hit-test'],
@@ -211,38 +242,23 @@ function loadModel(modelName: string): void {
             devModel.position.set(0, 1.5, -2);
             scene.add(devModel);
             pickHelper.registerModel(devModel);
-        } else if (uiManager) {
-            uiManager.forcePlacementMode(true);
+        } else {
+            // Selecting a model in the carousel arms placement: the next tap
+            // in Edit mode will place it.
+            modeManager.setMode('edit');
+            editMode.arm();
         }
     });
 }
 
 /**
- * Handles select events on the screen, triggering GPU picking and piece selection.
+ * Handles select events on the screen. The GestureRecognizer decides whether
+ * this is a genuine tap (or double tap) and dispatches it to the active mode.
  */
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
-    if (virtualJoycon.consumeTap()) return;
-    if (explodeController.consumeTap()) return;
-
-    // In placement mode a tap only ever places a model; picking is disabled.
-    if (uiManager.isPlacementMode) {
-        if (previewModel?.visible && loadedModel) {
-            placeModel();
-        }
-        return;
-    }
-
-    const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
-
-    if (pickedMesh) {
-        pickHelper.handleMeshSelection(pickedMesh, camera);
-    } else if (pickHelper.attachedParts.length > 0) {
-        pickHelper.attachedParts = [];
-    } else if (pickHelper.selectedMeshes.length > 0) {
-        pickHelper.clearSelection();
-    }
+    gestureRecognizer.handleXRSelect(inputSource);
 }
 
 /**
@@ -427,7 +443,9 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
         if (hitTestSource && referenceSpace && previewModel) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-            if (hitTestResults.length > 0 && uiManager.isPlacementMode) {
+            const placementArmed =
+                modeManager.currentName === 'edit' && editMode.isArmed;
+            if (hitTestResults.length > 0 && placementArmed) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {

@@ -262,6 +262,18 @@ export class PickHelper {
     }
 
     /**
+     * Removes a single mesh from the selection and any camera attachment,
+     * restoring its original material.
+     */
+    public deselectMesh(mesh: THREE.Mesh): void {
+        if (!this.selectedMeshes.includes(mesh)) return;
+
+        this.removeHighlight(mesh);
+        this.selectedMeshes = this.selectedMeshes.filter((m) => m !== mesh);
+        this.attachedParts = this.attachedParts.filter((p) => p.mesh !== mesh);
+    }
+
+    /**
      * Drops all attached pieces and clears the current selection.
      */
     public clearSelection() {

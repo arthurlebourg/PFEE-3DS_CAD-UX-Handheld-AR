@@ -27,10 +27,9 @@ export function setupDevMode(
   controls.update();
 
   // No XR session fires 'sessionstart' in dev mode, so surface the in-app UI
-  // (model picker, debug/perf toggles) directly. Selection mode is the useful
-  // default here since placement relies on AR hit-testing.
+  // (model picker, debug/perf toggles) directly. main.ts switches to Inspect
+  // mode since placement relies on AR hit-testing.
   uiManager.toggleVisibility(true);
-  uiManager.forcePlacementMode(false);
 
   const hud = document.createElement('div');
   hud.style.cssText = `
