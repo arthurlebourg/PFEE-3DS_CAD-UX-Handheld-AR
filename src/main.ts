@@ -6,13 +6,14 @@ import { isDevMode, setupDevMode } from './devMode.js';
 
 import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
+import { HierarchySlider } from './hierarchySlider.ts';
 import { PerfProbe } from './perf.js';
 import { VirtualJoycon } from './virtualJoycon.js';
 import { PinchScale } from './pinchScale.js';
 import { SceneRotator } from './sceneRotator.js';
 import { gestureArbiter, GestureType } from './gestureArbiter.js';
 
-const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
+const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
@@ -55,6 +56,7 @@ let virtualJoycon: VirtualJoycon;
 let pinchScale: PinchScale;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
+let hierarchySlider: HierarchySlider;
 let perf: PerfProbe;
 
 init();
@@ -99,6 +101,10 @@ function init(): void {
     xrRig.add(controller2);
 
     pickHelper = new PickHelper();
+    hierarchySlider = new HierarchySlider((node) => {
+        pickHelper.selectNode(node);
+    });
+    hierarchySlider.attach(document.body);
     perf = new PerfProbe({ visible: false });
     perf.mount(document.body);
 
@@ -244,11 +250,16 @@ function onSelect(inputSource?: XRInputSource): void {
         const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
 
         if (pickedMesh) {
+            const isNewSelection = !pickHelper.selectedMeshes.includes(pickedMesh);
             pickHelper.handleMeshSelection(pickedMesh, camera);
+            if (isNewSelection) {
+                hierarchySlider.setHierarchy(pickHelper.getSelectableAncestorChain(pickedMesh));
+            }
         } else if (pickHelper.attachedParts.length > 0) {
             pickHelper.attachedParts = [];
         } else if (pickHelper.selectedMeshes.length > 0) {
             pickHelper.clearSelection();
+            hierarchySlider.hide();
         }
     } finally {
         gestureArbiter.end(GestureType.Select);
@@ -286,6 +297,10 @@ function updateRigScale(newScale: number): void {
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
         pickHelper.clearSelection();
+        if (pickHelper) {
+        pickHelper.clearSelection();
+        hierarchySlider.hide();
+    }
     }
 }
 
