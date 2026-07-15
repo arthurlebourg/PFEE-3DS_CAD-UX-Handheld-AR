@@ -8,7 +8,9 @@ import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
 import { PerfProbe } from './perf.js';
 import { VirtualJoycon } from './virtualJoycon.js';
+import { PinchScale } from './pinchScale.js';
 import { SceneRotator } from './sceneRotator.js';
+import { gestureArbiter, GestureType } from './gestureArbiter.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -23,6 +25,9 @@ interface PhysicalPose {
     physicalPosition?: THREE.Vector3;
     physicalRotation?: THREE.Quaternion;
 }
+
+const MIN_RIG_SCALE = 0.1;
+const MAX_RIG_SCALE = 10;
 
 const currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
 let container: HTMLDivElement;
@@ -47,6 +52,7 @@ let devTick: (() => void) | null = null;
 
 let uiManager: UIManager;
 let virtualJoycon: VirtualJoycon;
+let pinchScale: PinchScale;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
@@ -142,6 +148,13 @@ function init(): void {
 
     virtualJoycon.attach(document.body);
 
+    pinchScale = new PinchScale((ratio) => {
+        const newRigScale = THREE.MathUtils.clamp(rigScale / ratio, MIN_RIG_SCALE, MAX_RIG_SCALE);
+        updateRigScale(newRigScale);
+        uiManager.setScale(newRigScale);
+    });
+    pinchScale.attach(document.body);
+
     if (isDevMode) {
         devTick = setupDevMode(scene, camera, renderer, uiManager);
     } else {
@@ -235,22 +248,27 @@ function onSelect(inputSource?: XRInputSource): void {
 
     if (virtualJoycon.consumeTap()) return;
 
-    // In placement mode a tap only ever places a model; picking is disabled.
-    if (uiManager.isPlacementMode) {
-        if (previewModel?.visible && loadedModel) {
-            placeModel();
+    if (!gestureArbiter.tryStart(GestureType.Select)) return;
+
+    try {
+        if (uiManager.isPlacementMode) {
+            if (previewModel?.visible && loadedModel) {
+                placeModel();
+            }
+            return;
         }
-        return;
-    }
 
-    const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
+        const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
 
-    if (pickedMesh) {
-        pickHelper.handleMeshSelection(pickedMesh, camera);
-    } else if (pickHelper.attachedParts.length > 0) {
-        pickHelper.attachedParts = [];
-    } else if (pickHelper.selectedMeshes.length > 0) {
-        pickHelper.clearSelection();
+        if (pickedMesh) {
+            pickHelper.handleMeshSelection(pickedMesh, camera);
+        } else if (pickHelper.attachedParts.length > 0) {
+            pickHelper.attachedParts = [];
+        } else if (pickHelper.selectedMeshes.length > 0) {
+            pickHelper.clearSelection();
+        }
+    } finally {
+        gestureArbiter.end(GestureType.Select);
     }
 
     uiManager.setDeleteButtonVisible(pickHelper.selectedMeshes.length > 0);
