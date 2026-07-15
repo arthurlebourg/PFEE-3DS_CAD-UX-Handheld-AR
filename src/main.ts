@@ -8,7 +8,6 @@ import { UIManager } from './ui.js';
 import { PickHelper } from './picking.js';
 import { PerfProbe } from './perf.js';
 import { VirtualJoycon } from './virtualJoycon.js';
-import { ExplodeController } from './explodeController.js';
 import { SceneRotator } from './sceneRotator.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
@@ -48,7 +47,6 @@ let devTick: (() => void) | null = null;
 
 let uiManager: UIManager;
 let virtualJoycon: VirtualJoycon;
-let explodeController: ExplodeController;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
@@ -132,11 +130,6 @@ function init(): void {
     });
 
     virtualJoycon.attach(document.body);
-
-    explodeController = new ExplodeController((factor) => {
-        explode(factor);
-    });
-    explodeController.attach(document.body);
 
     if (isDevMode) {
         devTick = setupDevMode(scene, camera, renderer, uiManager);
@@ -224,7 +217,6 @@ function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
     if (virtualJoycon.consumeTap()) return;
-    if (explodeController.consumeTap()) return;
 
     // In placement mode a tap only ever places a model; picking is disabled.
     if (uiManager.isPlacementMode) {
@@ -298,72 +290,6 @@ function placeModel(): void {
     placedModels.push(model);
     pickHelper.registerModel(model);
     sceneRotator.refresh(xrRig, placedModels);
-}
-
-/**
- * Applies an exploded-view offset to every placed (and, in dev mode, the dev)
- * model. A factor of 0 restores the assembled pose; higher factors push each
- * part radially outward from its own model's center.
- */
-function explode(factor: number): void {
-    const models = devModel ? [...placedModels, devModel] : placedModels;
-
-    for (const model of models) {
-        prepareExplode(model);
-
-        model.traverse((child) => {
-            if (!(child instanceof THREE.Mesh)) return;
-            const rest = child.userData.explodeRest as THREE.Vector3 | undefined;
-            const dir = child.userData.explodeDir as THREE.Vector3 | undefined;
-            if (!rest || !dir) return;
-
-            child.position.copy(rest).addScaledVector(dir, factor);
-        });
-    }
-}
-
-/**
- * Caches, once per model, each part's assembled local position and the radial
- * direction (in that part's parent local space) that points away from the
- * model center. Precomputing keeps the per-gesture {@link explode} pass cheap.
- */
-function prepareExplode(model: THREE.Object3D): void {
-    if (model.userData.explodePrepared) return;
-
-    model.updateWorldMatrix(true, true);
-    const modelCenter = new THREE.Box3()
-        .setFromObject(model)
-        .getCenter(new THREE.Vector3());
-
-    const meshCenter = new THREE.Vector3();
-    const offset = new THREE.Vector3();
-    const parentInverse = new THREE.Matrix4();
-    const toParentLocal = new THREE.Matrix3();
-
-    model.traverse((child) => {
-        if (!(child instanceof THREE.Mesh)) return;
-        const mesh = child as THREE.Mesh;
-
-        mesh.geometry.computeBoundingBox();
-        const box = mesh.geometry.boundingBox;
-        if (!box) return;
-
-        // World-space center of this part...
-        box.getCenter(meshCenter).applyMatrix4(mesh.matrixWorld);
-        // ...as a radial offset from the model center, rotated/scaled into the
-        // part's parent local frame so it adds straight onto mesh.position.
-        offset.copy(meshCenter).sub(modelCenter);
-        if (mesh.parent) {
-            parentInverse.copy(mesh.parent.matrixWorld).invert();
-            toParentLocal.setFromMatrix4(parentInverse);
-            offset.applyMatrix3(toParentLocal);
-        }
-
-        mesh.userData.explodeRest = mesh.position.clone();
-        mesh.userData.explodeDir = offset.clone();
-    });
-
-    model.userData.explodePrepared = true;
 }
 
 /**
