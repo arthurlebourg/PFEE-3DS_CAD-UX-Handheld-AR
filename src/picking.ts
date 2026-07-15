@@ -64,6 +64,12 @@ export class PickHelper {
                 return;
             }
 
+            // Save original local transform (position, rotation/quaternion, scale)
+            // to support resetting the model without modifying its mesh geometry.
+            child.userData.originalPosition = child.position.clone();
+            child.userData.originalQuaternion = child.quaternion.clone();
+            child.userData.originalScale = child.scale.clone();
+
             const id = this.nextId++;
 
             const color = new THREE.Color();
@@ -101,6 +107,10 @@ export class PickHelper {
             this.selectedMeshes = this.selectedMeshes.filter((m) => m !== child);
             this.attachedParts = this.attachedParts.filter((p) => p.mesh !== child);
             (child.userData.pickMaterial as THREE.Material | undefined)?.dispose();
+
+            delete child.userData.originalPosition;
+            delete child.userData.originalQuaternion;
+            delete child.userData.originalScale;
         });
     }
 

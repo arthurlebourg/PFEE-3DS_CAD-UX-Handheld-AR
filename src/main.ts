@@ -16,7 +16,7 @@ const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url'
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
-    modelUrls[filename] = modules[path];
+    modelUrls[filename] = modules[path] as string;
 }
 const availableModels = Object.keys(modelUrls);
 
@@ -107,6 +107,11 @@ function init(): void {
             if (!isPlacement && previewModel) {
                 previewModel.visible = false;
             }
+            if (pickHelper) {
+                pickHelper.clearSelection();
+            }
+            uiManager.setDeleteButtonVisible(false);
+            uiManager.setResetButtonVisible(false);
         },
         () => {},
         (modelName) => {
@@ -117,6 +122,12 @@ function init(): void {
         },
         (scale) => {
             updateRigScale(scale);
+        },
+        () => {
+            deleteSelectedModel();
+        },
+        () => {
+            resetSelectedModel();
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
@@ -215,6 +226,12 @@ function loadModel(modelName: string): void {
             devModel = loadedModel.clone();
             devModel.applyMatrix4(currentScaleMatrix);
             devModel.position.set(0, 1.5, -2);
+
+            // Save original transforms for resetting
+            devModel.userData.originalPosition = devModel.position.clone();
+            devModel.userData.originalQuaternion = devModel.quaternion.clone();
+            devModel.userData.originalModelScale = devModel.scale.clone();
+
             scene.add(devModel);
             pickHelper.registerModel(devModel);
         } else if (uiManager) {
@@ -253,6 +270,9 @@ function onSelect(inputSource?: XRInputSource): void {
     } finally {
         gestureArbiter.end(GestureType.Select);
     }
+
+    uiManager.setDeleteButtonVisible(pickHelper.selectedMeshes.length > 0);
+    uiManager.setResetButtonVisible(pickHelper.selectedMeshes.length > 0);
 }
 
 /**
@@ -286,6 +306,8 @@ function updateRigScale(newScale: number): void {
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
         pickHelper.clearSelection();
+        uiManager.setDeleteButtonVisible(false);
+        uiManager.setResetButtonVisible(false);
     }
 }
 
@@ -304,9 +326,128 @@ function placeModel(): void {
         model.userData.physicalRotation = previewPose.physicalRotation.clone();
     }
     
+    // Save original scale (including auto-fit scale)
+    model.userData.originalModelScale = model.scale.clone();
+    
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
+    sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Finds the root placed model group containing a given child.
+ */
+function findRootPlacedModel(object: THREE.Object3D): THREE.Object3D | null {
+    let curr: THREE.Object3D | null = object;
+    while (curr) {
+        if (placedModels.includes(curr) || curr === devModel) {
+            return curr;
+        }
+        curr = curr.parent;
+    }
+    return null;
+}
+
+/**
+ * Instantly deletes the model containing the currently selected parts from the scene.
+ */
+function deleteSelectedModel(): void {
+    if (pickHelper.selectedMeshes.length === 0) return;
+
+    const modelsToDelete = new Set<THREE.Object3D>();
+    for (const mesh of pickHelper.selectedMeshes) {
+        const rootModel = findRootPlacedModel(mesh);
+        if (rootModel) {
+            modelsToDelete.add(rootModel);
+        }
+    }
+
+    if (modelsToDelete.size === 0) return;
+
+    pickHelper.clearSelection();
+
+    for (const model of modelsToDelete) {
+        pickHelper.removeModel(model);
+        scene.remove(model);
+
+        const index = placedModels.indexOf(model);
+        if (index !== -1) {
+            placedModels.splice(index, 1);
+        }
+        if (model === devModel) {
+            devModel = null;
+        }
+    }
+
+    uiManager.setDeleteButtonVisible(false);
+    sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Instantly resets the selected model's pose and reassembles all its parts.
+ */
+function resetSelectedModel(): void {
+    if (pickHelper.selectedMeshes.length === 0) return;
+
+    const modelsToReset = new Set<THREE.Object3D>();
+    for (const mesh of pickHelper.selectedMeshes) {
+        const rootModel = findRootPlacedModel(mesh);
+        if (rootModel) {
+            modelsToReset.add(rootModel);
+        }
+    }
+
+    if (modelsToReset.size === 0) return;
+
+    // Clear selection to restore materials and highlights
+    pickHelper.clearSelection();
+
+    // Reset camera rig rotation and scale to their default values
+    sceneRotator.reset(xrRig);
+    updateRigScale(1.0);
+    uiManager.setScale(1.0);
+
+    for (const model of modelsToReset) {
+        // 1. Reset all sub-meshes (parts) local transforms to their original values
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                if (child.userData.originalPosition) {
+                    child.position.copy(child.userData.originalPosition as THREE.Vector3);
+                }
+                if (child.userData.originalQuaternion) {
+                    child.quaternion.copy(child.userData.originalQuaternion as THREE.Quaternion);
+                }
+                if (child.userData.originalScale) {
+                    child.scale.copy(child.userData.originalScale as THREE.Vector3);
+                }
+            }
+        });
+
+        // 2. Reset the overall model's position, rotation, and scale
+        if (model === devModel) {
+            if (model.userData.originalPosition) {
+                model.position.copy(model.userData.originalPosition as THREE.Vector3);
+            }
+            if (model.userData.originalQuaternion) {
+                model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
+            }
+        } else {
+            const previewPose = model.userData as PhysicalPose;
+            if (previewPose.physicalPosition && previewPose.physicalRotation) {
+                model.position.copy(previewPose.physicalPosition);
+                model.quaternion.copy(previewPose.physicalRotation);
+            }
+        }
+
+        if (model.userData.originalModelScale) {
+            model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
+        }
+    }
+
+    // Hide buttons and refresh camera center of rotation
+    uiManager.setDeleteButtonVisible(false);
+    uiManager.setResetButtonVisible(false);
     sceneRotator.refresh(xrRig, placedModels);
 }
 
