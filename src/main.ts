@@ -385,6 +385,11 @@ function resetSelectedModel(): void {
     // Clear selection to restore materials and highlights
     pickHelper.clearSelection();
 
+    // Reset camera rig rotation and scale to their default values
+    sceneRotator.reset(xrRig);
+    updateRigScale(1.0);
+    uiManager.setScale(1.0);
+
     for (const model of modelsToReset) {
         // 1. Reset all sub-meshes (parts) local transforms to their original values
         model.traverse((child) => {
@@ -412,7 +417,7 @@ function resetSelectedModel(): void {
         } else {
             const previewPose = model.userData as PhysicalPose;
             if (previewPose.physicalPosition && previewPose.physicalRotation) {
-                model.position.copy(previewPose.physicalPosition).multiplyScalar(rigScale);
+                model.position.copy(previewPose.physicalPosition);
                 model.quaternion.copy(previewPose.physicalRotation);
             }
         }
