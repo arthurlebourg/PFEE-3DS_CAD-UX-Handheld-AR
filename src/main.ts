@@ -4,15 +4,15 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { isDevMode, setupDevMode } from './devMode.js';
 
-import { UIManager } from './ui.js';
-import { PickHelper } from './picking.js';
-import { PerfProbe } from './perf.js';
-import { JoystickWidget } from './joystickWidget.js';
-import { SceneRotator } from './sceneRotator.js';
-import { GestureRecognizer } from './gestureRecognizer.js';
-import { ModeManager } from './modeManager.js';
-import { EditMode } from './editMode.js';
-import { InspectMode } from './inspectMode.js';
+import { UIManager } from './ui/uiManager.js';
+import { PerfProbe } from './ui/perf.js';
+import { JoystickWidget } from './ui/joystickWidget.js';
+import { PickHelper } from './scene/picking.js';
+import { SceneRotator } from './scene/sceneRotator.js';
+import { GestureRecognizer } from './input/gestureRecognizer.js';
+import { ModeManager } from './modes/modeManager.js';
+import { EditMode } from './modes/editMode.js';
+import { InspectMode } from './modes/inspectMode.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -105,21 +105,12 @@ function init(): void {
     perf.mount(document.body);
 
     uiManager = new UIManager(
-        () => {
-            modeManager.toggle();
-        },
-        () => {},
-        (modelName) => {
-            loadModel(modelName);
-        },
-        (showPerf) => {
-            perf.setVisible(showPerf);
-        },
-        () => {
-            deleteSelectedModel();
-        },
-        () => {
-            resetSelectedModel();
+        {
+            onModeToggle: () => modeManager.toggle(),
+            onModelSelect: (modelName) => loadModel(modelName),
+            onDelete: () => deleteSelectedModel(),
+            onReset: () => resetSelectedModel(),
+            onPerfToggle: (showPerf) => perf.setVisible(showPerf),
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement

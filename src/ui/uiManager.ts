@@ -1,5 +1,23 @@
 import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw } from 'lucide';
-import type { ModeName } from './interactionMode.js';
+import type { ModeName } from '../modes/interactionMode.js';
+
+export interface UIManagerCallbacks {
+    /**
+     * Requests an Edit/Inspect toggle. The ModeManager stays the source of
+     * truth and reflects the actual mode back through {@link UIManager.setMode}.
+     */
+    onModeToggle: () => void;
+    /** A model was chosen in the carousel. */
+    onModelSelect: (modelName: string) => void;
+    /** Delete the model currently selected in Edit mode. */
+    onDelete: () => void;
+    /** Reset the model currently selected in Edit mode. */
+    onReset: () => void;
+    /** Dev only: toggle the picking-colours debug view. */
+    onDebugToggle?: (showColors: boolean) => void;
+    /** Dev only: toggle the perf stats overlay. */
+    onPerfToggle?: (showPerf: boolean) => void;
+}
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
@@ -41,29 +59,10 @@ export class UIManager {
     private mode: ModeName = 'edit';
     private readonly isDevMode: boolean;
 
-    private onModeToggle: () => void;
-    private onDebugCallback: (showColors: boolean) => void;
-    private onModelCallback: (modelName: string) => void;
-    private onPerfCallback: (showPerf: boolean) => void;
-    private onDeleteCallback: () => void;
-    private onResetCallback: () => void;
+    private readonly callbacks: UIManagerCallbacks;
 
-    constructor(
-        onModeToggle: () => void,
-        onDebugCallback: (d: boolean) => void,
-        onModelCallback: (m: string) => void,
-        onPerfCallback: (s: boolean) => void,
-        onDeleteCallback: () => void,
-        onResetCallback: () => void,
-        models: string[],
-        isDevMode = false
-    ) {
-        this.onModeToggle = onModeToggle;
-        this.onDebugCallback = onDebugCallback;
-        this.onModelCallback = onModelCallback;
-        this.onPerfCallback = onPerfCallback;
-        this.onDeleteCallback = onDeleteCallback;
-        this.onResetCallback = onResetCallback;
+    constructor(callbacks: UIManagerCallbacks, models: string[], isDevMode = false) {
+        this.callbacks = callbacks;
         this.isDevMode = isDevMode;
 
         this.injectStyles();
@@ -125,11 +124,11 @@ export class UIManager {
         }
 
         // Wire up events
-        this.addPointerDownListener(this.btnMode,  () => this.onModeToggle());
+        this.addPointerDownListener(this.btnMode,  () => this.callbacks.onModeToggle());
         this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
         this.addPointerDownListener(this.btnGear,  () => this.toggleGear());
-        this.addPointerDownListener(this.btnDelete, () => this.onDeleteCallback());
-        this.addPointerDownListener(this.btnReset,  () => this.onResetCallback());
+        this.addPointerDownListener(this.btnDelete, () => this.callbacks.onDelete());
+        this.addPointerDownListener(this.btnReset,  () => this.callbacks.onReset());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
@@ -241,7 +240,7 @@ export class UIManager {
     private selectModel(modelName: string): void {
         this.activeModelName = modelName;
         this.updateUI();
-        this.onModelCallback(modelName);
+        this.callbacks.onModelSelect(modelName);
         this.isModelPanelOpen = false;
         this.modelSelectionPanel.classList.remove('open');
         this.btnModel.classList.remove('active');
@@ -250,13 +249,13 @@ export class UIManager {
     private toggleDebug(): void {
         this.showPickingColors = !this.showPickingColors;
         this.updateUI();
-        this.onDebugCallback(this.showPickingColors);
+        this.callbacks.onDebugToggle?.(this.showPickingColors);
     }
 
     private togglePerf(): void {
         this.showPerf = !this.showPerf;
         this.updateUI();
-        this.onPerfCallback(this.showPerf);
+        this.callbacks.onPerfToggle?.(this.showPerf);
     }
 
     // -------------------------------------------------------------------------

@@ -1,5 +1,5 @@
-import type { ModeManager } from './modeManager.js';
-import type { PinchState } from './interactionMode.js';
+import type { ModeManager } from '../modes/modeManager.js';
+import type { PinchState } from '../modes/interactionMode.js';
 
 /** Delay before a still finger becomes a hold (drives the rotation joystick). */
 const HOLD_DELAY_MS = 1000;

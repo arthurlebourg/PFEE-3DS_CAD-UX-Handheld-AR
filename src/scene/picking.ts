@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PerfProbe } from './perf.js';
+import type { PerfProbe } from '../ui/perf.js';
 
 interface AttachedPart {
     mesh: THREE.Mesh;

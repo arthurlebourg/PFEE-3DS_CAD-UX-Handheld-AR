@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { InteractionMode, PinchState } from './interactionMode.js';
 import { clamp } from './interactionMode.js';
-import type { PickHelper } from './picking.js';
+import type { PickHelper } from '../scene/picking.js';
 
 interface InspectModeDeps {
     pickHelper: PickHelper;

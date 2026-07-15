@@ -1,7 +1,7 @@
 import type { Object3D } from 'three';
 import type { InteractionMode, PinchState } from './interactionMode.js';
 import { clamp } from './interactionMode.js';
-import type { JoystickWidget } from './joystickWidget.js';
+import type { JoystickWidget } from '../ui/joystickWidget.js';
 
 interface EditModeDeps {
     joystick: JoystickWidget;

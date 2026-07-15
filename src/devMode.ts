@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { UIManager } from './ui.js';
+import type { UIManager } from './ui/uiManager.js';
 
 const params = new URLSearchParams(window.location.search);
 const DEV_TOKEN = import.meta.env.VITE_DEV_TOKEN as string;
