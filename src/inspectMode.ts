@@ -68,6 +68,16 @@ export class InspectMode implements InteractionMode {
         this.hiddenMeshes.push(mesh);
     }
 
+    /**
+     * Realigns the pinch state after an external reassembly (Reset button),
+     * so the next pinch starts from an assembled model instead of jumping
+     * back to the old explosion factor.
+     */
+    public resetExplodeState(): void {
+        this.committedExplode = 0;
+        this.currentExplode = 0;
+    }
+
     /** Reveals every piece hidden by double tap (future "show all" UI button). */
     public showAllHidden(): void {
         for (const mesh of this.hiddenMeshes) {

@@ -64,6 +64,12 @@ export class PickHelper {
                 return;
             }
 
+            // Save original local transform (position, rotation/quaternion, scale)
+            // to support resetting the model without modifying its mesh geometry.
+            child.userData.originalPosition = child.position.clone();
+            child.userData.originalQuaternion = child.quaternion.clone();
+            child.userData.originalScale = child.scale.clone();
+
             const id = this.nextId++;
 
             const color = new THREE.Color();
@@ -101,6 +107,10 @@ export class PickHelper {
             this.selectedMeshes = this.selectedMeshes.filter((m) => m !== child);
             this.attachedParts = this.attachedParts.filter((p) => p.mesh !== child);
             (child.userData.pickMaterial as THREE.Material | undefined)?.dispose();
+
+            delete child.userData.originalPosition;
+            delete child.userData.originalQuaternion;
+            delete child.userData.originalScale;
         });
     }
 
@@ -262,6 +272,31 @@ export class PickHelper {
     }
 
     /**
+     * Highlights every mesh of a placed model, marking it as the selected
+     * model in Edit mode. Blue, to distinguish from the orange piece
+     * selection used in Inspect mode.
+     */
+    public highlightModel(model: THREE.Object3D, colorHex = 0x007bff): void {
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                this.highlightMesh(child as THREE.Mesh, colorHex);
+            }
+        });
+    }
+
+    /**
+     * Restores the original appearance of every mesh of a model highlighted
+     * by {@link highlightModel}.
+     */
+    public unhighlightModel(model: THREE.Object3D): void {
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                this.removeHighlight(child as THREE.Mesh);
+            }
+        });
+    }
+
+    /**
      * Removes a single mesh from the selection and any camera attachment,
      * restoring its original material.
      */
@@ -303,9 +338,10 @@ export class PickHelper {
     }
 
     /**
-     * Visually highlights a mesh by setting its emissive color to bright orange.
+     * Visually highlights a mesh by setting its emissive color (bright orange
+     * by default, for the Inspect piece selection).
      */
-    private highlightMesh(mesh: THREE.Mesh) {
+    private highlightMesh(mesh: THREE.Mesh, colorHex = 0xff6600) {
         if (!mesh.userData.isolatedMaterial) {
             mesh.material = (mesh.material as THREE.Material).clone();
             mesh.userData.isolatedMaterial = true;
@@ -318,7 +354,7 @@ export class PickHelper {
                 mesh.userData.originalEmissiveIntensity = material.emissiveIntensity;
             }
 
-            material.emissive.setHex(0xff6600);
+            material.emissive.setHex(colorHex);
 
             if ('emissiveIntensity' in material) {
                 material.emissiveIntensity = 0.6;

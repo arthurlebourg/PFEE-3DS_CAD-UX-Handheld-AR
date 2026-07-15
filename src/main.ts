@@ -115,6 +115,12 @@ function init(): void {
         (showPerf) => {
             perf.setVisible(showPerf);
         },
+        () => {
+            deleteSelectedModel();
+        },
+        () => {
+            resetSelectedModel();
+        },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
     );
@@ -144,6 +150,19 @@ function init(): void {
         },
         onRigScale: (scale) => {
             updateRigScale(scale);
+        },
+        pickModel: (inputSource) => {
+            const mesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
+            return mesh ? findRootPlacedModel(mesh) : null;
+        },
+        highlightModel: (model) => {
+            pickHelper.highlightModel(model);
+        },
+        unhighlightModel: (model) => {
+            pickHelper.unhighlightModel(model);
+        },
+        onSelectionChange: (model) => {
+            uiManager.setModelActionsVisible(model !== null);
         },
     });
 
@@ -240,6 +259,12 @@ function loadModel(modelName: string): void {
             devModel = loadedModel.clone();
             devModel.applyMatrix4(currentScaleMatrix);
             devModel.position.set(0, 1.5, -2);
+
+            // Save original transforms for the Reset action
+            devModel.userData.originalPosition = devModel.position.clone();
+            devModel.userData.originalQuaternion = devModel.quaternion.clone();
+            devModel.userData.originalModelScale = devModel.scale.clone();
+
             scene.add(devModel);
             pickHelper.registerModel(devModel);
         } else {
@@ -309,10 +334,108 @@ function placeModel(): void {
         model.userData.physicalPosition = previewPose.physicalPosition.clone();
         model.userData.physicalRotation = previewPose.physicalRotation.clone();
     }
-    
+
+    // Save original scale (including auto-fit scale) for the Reset action
+    model.userData.originalModelScale = model.scale.clone();
+
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
+    sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Finds the root placed model (or the dev model) containing a given child.
+ */
+function findRootPlacedModel(object: THREE.Object3D): THREE.Object3D | null {
+    let curr: THREE.Object3D | null = object;
+    while (curr) {
+        if (placedModels.includes(curr) || curr === devModel) {
+            return curr;
+        }
+        curr = curr.parent;
+    }
+    return null;
+}
+
+/**
+ * Deletes the model currently selected in Edit mode from the scene.
+ */
+function deleteSelectedModel(): void {
+    const model = editMode.selectedModel;
+    if (!model) return;
+
+    // Unhighlights the model and hides the Delete/Reset buttons.
+    editMode.clearSelection();
+    pickHelper.clearSelection();
+
+    pickHelper.removeModel(model);
+    scene.remove(model);
+
+    const index = placedModels.indexOf(model);
+    if (index !== -1) {
+        placedModels.splice(index, 1);
+    }
+    if (model === devModel) {
+        devModel = null;
+    }
+
+    sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Resets the model currently selected in Edit mode: reassembles its parts
+ * (undoing explode, camera-attached drags and hidden pieces), restores its
+ * original pose and scale, and resets the rig rotation and perceived scale.
+ */
+function resetSelectedModel(): void {
+    const model = editMode.selectedModel;
+    if (!model) return;
+
+    // Drop Inspect-side state first: piece selection, hidden pieces, and the
+    // committed explode factor (positions are restored below).
+    pickHelper.clearSelection();
+    inspectMode.showAllHidden();
+    inspectMode.resetExplodeState();
+
+    // Reset camera rig rotation and perceived scale to their default values.
+    sceneRotator.reset(xrRig);
+    updateRigScale(1.0);
+    editMode.resetScaleState();
+
+    // Restore every part's original local transform (saved at registration).
+    model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        if (child.userData.originalPosition) {
+            child.position.copy(child.userData.originalPosition as THREE.Vector3);
+        }
+        if (child.userData.originalQuaternion) {
+            child.quaternion.copy(child.userData.originalQuaternion as THREE.Quaternion);
+        }
+        if (child.userData.originalScale) {
+            child.scale.copy(child.userData.originalScale as THREE.Vector3);
+        }
+    });
+
+    // Restore the model's own pose and scale.
+    if (model === devModel) {
+        if (model.userData.originalPosition) {
+            model.position.copy(model.userData.originalPosition as THREE.Vector3);
+        }
+        if (model.userData.originalQuaternion) {
+            model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
+        }
+    } else {
+        const pose = model.userData as PhysicalPose;
+        if (pose.physicalPosition && pose.physicalRotation) {
+            model.position.copy(pose.physicalPosition);
+            model.quaternion.copy(pose.physicalRotation);
+        }
+    }
+    if (model.userData.originalModelScale) {
+        model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
+    }
+
     sceneRotator.refresh(xrRig, placedModels);
 }
 
