@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PerfProbe } from './perf.js';
+import type { PerfProbe } from '../ui/perf.js';
 
 interface AttachedPart {
     mesh: THREE.Mesh;
@@ -272,6 +272,43 @@ export class PickHelper {
     }
 
     /**
+     * Highlights every mesh of a placed model, marking it as the selected
+     * model in Edit mode. Blue, to distinguish from the orange piece
+     * selection used in Inspect mode.
+     */
+    public highlightModel(model: THREE.Object3D, colorHex = 0x007bff): void {
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                this.highlightMesh(child as THREE.Mesh, colorHex);
+            }
+        });
+    }
+
+    /**
+     * Restores the original appearance of every mesh of a model highlighted
+     * by {@link highlightModel}.
+     */
+    public unhighlightModel(model: THREE.Object3D): void {
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                this.removeHighlight(child as THREE.Mesh);
+            }
+        });
+    }
+
+    /**
+     * Removes a single mesh from the selection and any camera attachment,
+     * restoring its original material.
+     */
+    public deselectMesh(mesh: THREE.Mesh): void {
+        if (!this.selectedMeshes.includes(mesh)) return;
+
+        this.removeHighlight(mesh);
+        this.selectedMeshes = this.selectedMeshes.filter((m) => m !== mesh);
+        this.attachedParts = this.attachedParts.filter((p) => p.mesh !== mesh);
+    }
+
+    /**
      * Drops all attached pieces and clears the current selection.
      */
     public clearSelection() {
@@ -301,9 +338,10 @@ export class PickHelper {
     }
 
     /**
-     * Visually highlights a mesh by setting its emissive color to bright orange.
+     * Visually highlights a mesh by setting its emissive color (bright orange
+     * by default, for the Inspect piece selection).
      */
-    private highlightMesh(mesh: THREE.Mesh) {
+    private highlightMesh(mesh: THREE.Mesh, colorHex = 0xff6600) {
         if (!mesh.userData.isolatedMaterial) {
             mesh.material = (mesh.material as THREE.Material).clone();
             mesh.userData.isolatedMaterial = true;
@@ -316,7 +354,7 @@ export class PickHelper {
                 mesh.userData.originalEmissiveIntensity = material.emissiveIntensity;
             }
 
-            material.emissive.setHex(0xff6600);
+            material.emissive.setHex(colorHex);
 
             if ('emissiveIntensity' in material) {
                 material.emissiveIntensity = 0.6;

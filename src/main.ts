@@ -4,13 +4,15 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { isDevMode, setupDevMode } from './devMode.js';
 
-import { UIManager } from './ui.js';
-import { PickHelper } from './picking.js';
-import { PerfProbe } from './perf.js';
-import { VirtualJoycon } from './virtualJoycon.js';
-import { PinchScale } from './pinchScale.js';
-import { SceneRotator } from './sceneRotator.js';
-import { gestureArbiter, GestureType } from './gestureArbiter.js';
+import { UIManager } from './ui/uiManager.js';
+import { PerfProbe } from './ui/perf.js';
+import { JoystickWidget } from './ui/joystickWidget.js';
+import { PickHelper } from './scene/picking.js';
+import { SceneRotator } from './scene/sceneRotator.js';
+import { GestureRecognizer } from './input/gestureRecognizer.js';
+import { ModeManager } from './modes/modeManager.js';
+import { EditMode } from './modes/editMode.js';
+import { InspectMode } from './modes/inspectMode.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -25,9 +27,6 @@ interface PhysicalPose {
     physicalPosition?: THREE.Vector3;
     physicalRotation?: THREE.Quaternion;
 }
-
-const MIN_RIG_SCALE = 0.1;
-const MAX_RIG_SCALE = 10;
 
 const currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
 let container: HTMLDivElement;
@@ -51,11 +50,14 @@ let hitTestSourceRequested = false;
 let devTick: (() => void) | null = null;
 
 let uiManager: UIManager;
-let virtualJoycon: VirtualJoycon;
-let pinchScale: PinchScale;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
+
+let gestureRecognizer: GestureRecognizer;
+let modeManager: ModeManager;
+let editMode: EditMode;
+let inspectMode: InspectMode;
 
 init();
 
@@ -103,31 +105,12 @@ function init(): void {
     perf.mount(document.body);
 
     uiManager = new UIManager(
-        (isPlacement) => {
-            if (!isPlacement && previewModel) {
-                previewModel.visible = false;
-            }
-            if (pickHelper) {
-                pickHelper.clearSelection();
-            }
-            uiManager.setDeleteButtonVisible(false);
-            uiManager.setResetButtonVisible(false);
-        },
-        () => {},
-        (modelName) => {
-            loadModel(modelName);
-        },
-        (showPerf) => {
-            perf.setVisible(showPerf);
-        },
-        (scale) => {
-            updateRigScale(scale);
-        },
-        () => {
-            deleteSelectedModel();
-        },
-        () => {
-            resetSelectedModel();
+        {
+            onModeToggle: () => modeManager.toggle(),
+            onModelSelect: (modelName) => loadModel(modelName),
+            onDelete: () => deleteSelectedModel(),
+            onReset: () => resetSelectedModel(),
+            onPerfToggle: (showPerf) => perf.setVisible(showPerf),
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
@@ -136,7 +119,7 @@ function init(): void {
     uiManager.attach(document.body);
     sceneRotator = new SceneRotator();
 
-    virtualJoycon = new VirtualJoycon((strength) => {
+    const joystick = new JoystickWidget((strength) => {
         const maxSpeed = 0.06;
 
         sceneRotator.rotateAroundCenter(
@@ -145,18 +128,59 @@ function init(): void {
             strength * maxSpeed,
         );
     });
+    joystick.attach(document.body);
 
-    virtualJoycon.attach(document.body);
-
-    pinchScale = new PinchScale((ratio) => {
-        const newRigScale = THREE.MathUtils.clamp(rigScale / ratio, MIN_RIG_SCALE, MAX_RIG_SCALE);
-        updateRigScale(newRigScale);
-        uiManager.setScale(newRigScale);
+    editMode = new EditMode({
+        joystick,
+        placeModel: () => {
+            if (previewModel?.visible && loadedModel) {
+                placeModel();
+                return true;
+            }
+            return false;
+        },
+        onRigScale: (scale) => {
+            updateRigScale(scale);
+        },
+        pickModel: (inputSource) => {
+            const mesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
+            return mesh ? findRootPlacedModel(mesh) : null;
+        },
+        highlightModel: (model) => {
+            pickHelper.highlightModel(model);
+        },
+        unhighlightModel: (model) => {
+            pickHelper.unhighlightModel(model);
+        },
+        onSelectionChange: (model) => {
+            uiManager.setModelActionsVisible(model !== null);
+        },
     });
-    pinchScale.attach(document.body);
+
+    inspectMode = new InspectMode({
+        pickHelper,
+        pickMesh: (inputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf),
+        getCamera: () => camera,
+        onExplode: (factor) => {
+            explode(factor);
+        },
+    });
+
+    modeManager = new ModeManager(editMode, inspectMode, (mode) => {
+        uiManager.setMode(mode);
+        if (mode === 'inspect' && previewModel) {
+            previewModel.visible = false;
+        }
+    });
+
+    gestureRecognizer = new GestureRecognizer(modeManager);
+    gestureRecognizer.attach(document.body);
 
     if (isDevMode) {
         devTick = setupDevMode(scene, camera, renderer, uiManager);
+        // No AR hit-testing in dev mode, so placement is useless: inspecting
+        // (picking, explode) is the relevant default.
+        modeManager.setMode('inspect');
     } else {
         const arButtonOptions = {
             requiredFeatures: ['hit-test'],
@@ -227,52 +251,30 @@ function loadModel(modelName: string): void {
             devModel.applyMatrix4(currentScaleMatrix);
             devModel.position.set(0, 1.5, -2);
 
-            // Save original transforms for resetting
+            // Save original transforms for the Reset action
             devModel.userData.originalPosition = devModel.position.clone();
             devModel.userData.originalQuaternion = devModel.quaternion.clone();
             devModel.userData.originalModelScale = devModel.scale.clone();
 
             scene.add(devModel);
             pickHelper.registerModel(devModel);
-        } else if (uiManager) {
-            uiManager.forcePlacementMode(true);
+        } else {
+            // Selecting a model in the carousel arms placement: the next tap
+            // in Edit mode will place it.
+            modeManager.setMode('edit');
+            editMode.arm();
         }
     });
 }
 
 /**
- * Handles select events on the screen, triggering GPU picking and piece selection.
+ * Handles select events on the screen. The GestureRecognizer decides whether
+ * this is a genuine tap (or double tap) and dispatches it to the active mode.
  */
 function onSelect(inputSource?: XRInputSource): void {
     if (!renderer.xr.isPresenting) return;
 
-    if (virtualJoycon.consumeTap()) return;
-
-    if (!gestureArbiter.tryStart(GestureType.Select)) return;
-
-    try {
-        if (uiManager.isPlacementMode) {
-            if (previewModel?.visible && loadedModel) {
-                placeModel();
-            }
-            return;
-        }
-
-        const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
-
-        if (pickedMesh) {
-            pickHelper.handleMeshSelection(pickedMesh, camera);
-        } else if (pickHelper.attachedParts.length > 0) {
-            pickHelper.attachedParts = [];
-        } else if (pickHelper.selectedMeshes.length > 0) {
-            pickHelper.clearSelection();
-        }
-    } finally {
-        gestureArbiter.end(GestureType.Select);
-    }
-
-    uiManager.setDeleteButtonVisible(pickHelper.selectedMeshes.length > 0);
-    uiManager.setResetButtonVisible(pickHelper.selectedMeshes.length > 0);
+    gestureRecognizer.handleXRSelect(inputSource);
 }
 
 /**
@@ -306,8 +308,6 @@ function updateRigScale(newScale: number): void {
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
         pickHelper.clearSelection();
-        uiManager.setDeleteButtonVisible(false);
-        uiManager.setResetButtonVisible(false);
     }
 }
 
@@ -325,10 +325,10 @@ function placeModel(): void {
         model.userData.physicalPosition = previewPose.physicalPosition.clone();
         model.userData.physicalRotation = previewPose.physicalRotation.clone();
     }
-    
-    // Save original scale (including auto-fit scale)
+
+    // Save original scale (including auto-fit scale) for the Reset action
     model.userData.originalModelScale = model.scale.clone();
-    
+
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
@@ -336,7 +336,7 @@ function placeModel(): void {
 }
 
 /**
- * Finds the root placed model group containing a given child.
+ * Finds the root placed model (or the dev model) containing a given child.
  */
 function findRootPlacedModel(object: THREE.Object3D): THREE.Object3D | null {
     let curr: THREE.Object3D | null = object;
@@ -350,105 +350,150 @@ function findRootPlacedModel(object: THREE.Object3D): THREE.Object3D | null {
 }
 
 /**
- * Instantly deletes the model containing the currently selected parts from the scene.
+ * Deletes the model currently selected in Edit mode from the scene.
  */
 function deleteSelectedModel(): void {
-    if (pickHelper.selectedMeshes.length === 0) return;
+    const model = editMode.selectedModel;
+    if (!model) return;
 
-    const modelsToDelete = new Set<THREE.Object3D>();
-    for (const mesh of pickHelper.selectedMeshes) {
-        const rootModel = findRootPlacedModel(mesh);
-        if (rootModel) {
-            modelsToDelete.add(rootModel);
-        }
-    }
-
-    if (modelsToDelete.size === 0) return;
-
+    // Unhighlights the model and hides the Delete/Reset buttons.
+    editMode.clearSelection();
     pickHelper.clearSelection();
 
-    for (const model of modelsToDelete) {
-        pickHelper.removeModel(model);
-        scene.remove(model);
+    pickHelper.removeModel(model);
+    scene.remove(model);
 
-        const index = placedModels.indexOf(model);
-        if (index !== -1) {
-            placedModels.splice(index, 1);
-        }
-        if (model === devModel) {
-            devModel = null;
-        }
+    const index = placedModels.indexOf(model);
+    if (index !== -1) {
+        placedModels.splice(index, 1);
+    }
+    if (model === devModel) {
+        devModel = null;
     }
 
-    uiManager.setDeleteButtonVisible(false);
     sceneRotator.refresh(xrRig, placedModels);
 }
 
 /**
- * Instantly resets the selected model's pose and reassembles all its parts.
+ * Resets the model currently selected in Edit mode: reassembles its parts
+ * (undoing explode, camera-attached drags and hidden pieces), restores its
+ * original pose and scale, and resets the rig rotation and perceived scale.
  */
 function resetSelectedModel(): void {
-    if (pickHelper.selectedMeshes.length === 0) return;
+    const model = editMode.selectedModel;
+    if (!model) return;
 
-    const modelsToReset = new Set<THREE.Object3D>();
-    for (const mesh of pickHelper.selectedMeshes) {
-        const rootModel = findRootPlacedModel(mesh);
-        if (rootModel) {
-            modelsToReset.add(rootModel);
-        }
-    }
-
-    if (modelsToReset.size === 0) return;
-
-    // Clear selection to restore materials and highlights
+    // Drop Inspect-side state first: piece selection, hidden pieces, and the
+    // committed explode factor (positions are restored below).
     pickHelper.clearSelection();
+    inspectMode.showAllHidden();
+    inspectMode.resetExplodeState();
 
-    // Reset camera rig rotation and scale to their default values
+    // Reset camera rig rotation and perceived scale to their default values.
     sceneRotator.reset(xrRig);
     updateRigScale(1.0);
-    uiManager.setScale(1.0);
+    editMode.resetScaleState();
 
-    for (const model of modelsToReset) {
-        // 1. Reset all sub-meshes (parts) local transforms to their original values
-        model.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                if (child.userData.originalPosition) {
-                    child.position.copy(child.userData.originalPosition as THREE.Vector3);
-                }
-                if (child.userData.originalQuaternion) {
-                    child.quaternion.copy(child.userData.originalQuaternion as THREE.Quaternion);
-                }
-                if (child.userData.originalScale) {
-                    child.scale.copy(child.userData.originalScale as THREE.Vector3);
-                }
-            }
-        });
-
-        // 2. Reset the overall model's position, rotation, and scale
-        if (model === devModel) {
-            if (model.userData.originalPosition) {
-                model.position.copy(model.userData.originalPosition as THREE.Vector3);
-            }
-            if (model.userData.originalQuaternion) {
-                model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
-            }
-        } else {
-            const previewPose = model.userData as PhysicalPose;
-            if (previewPose.physicalPosition && previewPose.physicalRotation) {
-                model.position.copy(previewPose.physicalPosition);
-                model.quaternion.copy(previewPose.physicalRotation);
-            }
+    // Restore every part's original local transform (saved at registration).
+    model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        if (child.userData.originalPosition) {
+            child.position.copy(child.userData.originalPosition as THREE.Vector3);
         }
+        if (child.userData.originalQuaternion) {
+            child.quaternion.copy(child.userData.originalQuaternion as THREE.Quaternion);
+        }
+        if (child.userData.originalScale) {
+            child.scale.copy(child.userData.originalScale as THREE.Vector3);
+        }
+    });
 
-        if (model.userData.originalModelScale) {
-            model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
+    // Restore the model's own pose and scale.
+    if (model === devModel) {
+        if (model.userData.originalPosition) {
+            model.position.copy(model.userData.originalPosition as THREE.Vector3);
+        }
+        if (model.userData.originalQuaternion) {
+            model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
+        }
+    } else {
+        const pose = model.userData as PhysicalPose;
+        if (pose.physicalPosition && pose.physicalRotation) {
+            model.position.copy(pose.physicalPosition);
+            model.quaternion.copy(pose.physicalRotation);
         }
     }
+    if (model.userData.originalModelScale) {
+        model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
+    }
 
-    // Hide buttons and refresh camera center of rotation
-    uiManager.setDeleteButtonVisible(false);
-    uiManager.setResetButtonVisible(false);
     sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Applies an exploded-view offset to every placed (and, in dev mode, the dev)
+ * model. A factor of 0 restores the assembled pose; higher factors push each
+ * part radially outward from its own model's center.
+ */
+function explode(factor: number): void {
+    const models = devModel ? [...placedModels, devModel] : placedModels;
+
+    for (const model of models) {
+        prepareExplode(model);
+
+        model.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) return;
+            const rest = child.userData.explodeRest as THREE.Vector3 | undefined;
+            const dir = child.userData.explodeDir as THREE.Vector3 | undefined;
+            if (!rest || !dir) return;
+
+            child.position.copy(rest).addScaledVector(dir, factor);
+        });
+    }
+}
+
+/**
+ * Caches, once per model, each part's assembled local position and the radial
+ * direction (in that part's parent local space) that points away from the
+ * model center. Precomputing keeps the per-gesture {@link explode} pass cheap.
+ */
+function prepareExplode(model: THREE.Object3D): void {
+    if (model.userData.explodePrepared) return;
+
+    model.updateWorldMatrix(true, true);
+    const modelCenter = new THREE.Box3()
+        .setFromObject(model)
+        .getCenter(new THREE.Vector3());
+
+    const meshCenter = new THREE.Vector3();
+    const offset = new THREE.Vector3();
+    const parentInverse = new THREE.Matrix4();
+    const toParentLocal = new THREE.Matrix3();
+
+    model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const mesh = child as THREE.Mesh;
+
+        mesh.geometry.computeBoundingBox();
+        const box = mesh.geometry.boundingBox;
+        if (!box) return;
+
+        // World-space center of this part...
+        box.getCenter(meshCenter).applyMatrix4(mesh.matrixWorld);
+        // ...as a radial offset from the model center, rotated/scaled into the
+        // part's parent local frame so it adds straight onto mesh.position.
+        offset.copy(meshCenter).sub(modelCenter);
+        if (mesh.parent) {
+            parentInverse.copy(mesh.parent.matrixWorld).invert();
+            toParentLocal.setFromMatrix4(parentInverse);
+            offset.applyMatrix3(toParentLocal);
+        }
+
+        mesh.userData.explodeRest = mesh.position.clone();
+        mesh.userData.explodeDir = offset.clone();
+    });
+
+    model.userData.explodePrepared = true;
 }
 
 /**
@@ -512,7 +557,9 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
         if (hitTestSource && referenceSpace && previewModel) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-            if (hitTestResults.length > 0 && uiManager.isPlacementMode) {
+            const placementArmed =
+                modeManager.currentName === 'edit' && editMode.isArmed;
+            if (hitTestResults.length > 0 && placementArmed) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
