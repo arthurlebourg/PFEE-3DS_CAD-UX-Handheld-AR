@@ -91,9 +91,9 @@ export class UIManager {
 
         // Contextual Delete/Reset buttons (hidden until a model is selected)
         this.btnDelete.className = 'ar-delete-btn';
-        this.btnDelete.innerHTML = `<i data-lucide="trash-2"></i><span class="ar-delete-label">Supprimer le modèle</span>`;
+        this.btnDelete.innerHTML = `<i data-lucide="trash-2">`;
         this.btnReset.className = 'ar-reset-btn';
-        this.btnReset.innerHTML = `<i data-lucide="rotate-ccw"></i><span class="ar-reset-label">Réinitialiser le modèle</span>`;
+        this.btnReset.innerHTML = `<i data-lucide="rotate-ccw">`;
 
         // Dev-only gear radial menu (debug buttons)
         this.container.className = 'ar-menu-container';

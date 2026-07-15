@@ -160,7 +160,6 @@ function init(): void {
     inspectMode = new InspectMode({
         pickHelper,
         pickMesh: (inputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf),
-        getCamera: () => camera,
         onExplode: (factor) => {
             explode(factor);
         },
@@ -376,7 +375,7 @@ function deleteSelectedModel(): void {
 
 /**
  * Resets the model currently selected in Edit mode: reassembles its parts
- * (undoing explode, camera-attached drags and hidden pieces), restores its
+ * (undoing explode and hidden pieces), restores its
  * original pose and scale, and resets the rig rotation and perceived scale.
  */
 function resetSelectedModel(): void {
@@ -591,9 +590,6 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             }
         }
     }
-
-    pickHelper.updateAttachedMeshes(camera);
-
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {

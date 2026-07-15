@@ -1,10 +1,7 @@
 import * as THREE from 'three';
 import type { PerfProbe } from '../ui/perf.js';
 
-interface AttachedPart {
-    mesh: THREE.Mesh;
-    offsetMatrix: THREE.Matrix4;
-}
+
 
 type MaterialBackup = { mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] };
 
@@ -23,7 +20,7 @@ export class PickHelper {
     public pickingTexture: THREE.WebGLRenderTarget;
 
     public selectedMeshes: THREE.Mesh[] = [];
-    public attachedParts: AttachedPart[] = [];
+
 
     private idToMeshMap = new Map<number, THREE.Mesh>();
     private nextId = 1;
@@ -92,7 +89,7 @@ export class PickHelper {
 
     /**
      * Unregisters every sub-mesh of a model: clears it from the id map, drops any
-     * selection/attachment state, and disposes the cached pick material.
+     * selection state, and disposes the cached pick material.
      */
     public removeModel(model: THREE.Object3D): void {
         model.traverse((child) => {
@@ -105,7 +102,7 @@ export class PickHelper {
                 }
             }
             this.selectedMeshes = this.selectedMeshes.filter((m) => m !== child);
-            this.attachedParts = this.attachedParts.filter((p) => p.mesh !== child);
+
             (child.userData.pickMaterial as THREE.Material | undefined)?.dispose();
 
             delete child.userData.originalPosition;
@@ -114,24 +111,7 @@ export class PickHelper {
         });
     }
 
-    /**
-     * Smoothly updates the position of all attached parts to follow the camera.
-     */
-    public updateAttachedMeshes(camera: THREE.Camera) {
-        if (this.attachedParts.length === 0) {
-            return;
-        }
 
-        for (const part of this.attachedParts) {
-            if (!part.mesh.parent) continue;
-
-            const targetWorldMatrix = new THREE.Matrix4().multiplyMatrices(camera.matrixWorld, part.offsetMatrix);
-            const targetWorldPos = new THREE.Vector3().setFromMatrixPosition(targetWorldMatrix);
-
-            part.mesh.parent.worldToLocal(targetWorldPos);
-            part.mesh.position.lerp(targetWorldPos, 0.15);
-        }
-    }
 
     /**
      * Swaps every registered mesh to its flat id-material, returning the list of
@@ -252,22 +232,14 @@ export class PickHelper {
         }
     }
 
-    /**
-     * Handles the interaction logic for selecting, multi-selecting, and attaching meshes.
-     */
-    public handleMeshSelection(pickedMesh: THREE.Mesh, camera: THREE.Camera) {
+    public handleMeshSelection(pickedMesh: THREE.Mesh) {
         const isAlreadySelected = this.selectedMeshes.includes(pickedMesh);
 
         if (isAlreadySelected) {
-            if (this.attachedParts.length > 0) {
-                this.attachedParts = [];
-            } else {
-                this.attachSelectedMeshesToCamera(camera);
-            }
+            this.deselectMesh(pickedMesh);
         } else {
             this.selectedMeshes.push(pickedMesh);
             this.highlightMesh(pickedMesh);
-            this.attachedParts = [];
         }
     }
 
@@ -297,7 +269,7 @@ export class PickHelper {
     }
 
     /**
-     * Removes a single mesh from the selection and any camera attachment,
+     * Removes a single mesh from the selection,
      * restoring its original material.
      */
     public deselectMesh(mesh: THREE.Mesh): void {
@@ -305,37 +277,20 @@ export class PickHelper {
 
         this.removeHighlight(mesh);
         this.selectedMeshes = this.selectedMeshes.filter((m) => m !== mesh);
-        this.attachedParts = this.attachedParts.filter((p) => p.mesh !== mesh);
+
     }
 
     /**
-     * Drops all attached pieces and clears the current selection.
+     * Clears the current selection.
      */
     public clearSelection() {
         for (const mesh of this.selectedMeshes) {
             this.removeHighlight(mesh);
         }
         this.selectedMeshes = [];
-        this.attachedParts = [];
     }
 
-    /**
-     * Binds all currently selected meshes to the camera for grouped movement.
-     */
-    private attachSelectedMeshesToCamera(camera: THREE.Camera) {
-        this.attachedParts = [];
-        const cameraInverse = camera.matrixWorldInverse.clone();
 
-        for (const mesh of this.selectedMeshes) {
-            const meshWorldMatrix = mesh.matrixWorld;
-            const offsetMatrix = new THREE.Matrix4().multiplyMatrices(cameraInverse, meshWorldMatrix);
-
-            this.attachedParts.push({
-                mesh: mesh,
-                offsetMatrix: offsetMatrix
-            });
-        }
-    }
 
     /**
      * Visually highlights a mesh by setting its emissive color (bright orange

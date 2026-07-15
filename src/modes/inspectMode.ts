@@ -7,7 +7,6 @@ interface InspectModeDeps {
     pickHelper: PickHelper;
     /** GPU-picks the mesh under the tap (needs the XRInputSource's screen coords). */
     pickMesh(inputSource?: XRInputSource): THREE.Mesh | null;
-    getCamera(): THREE.Camera;
     /** Drives the exploded view; 0 = assembled. */
     onExplode(factor: number): void;
 }
@@ -18,7 +17,7 @@ const MAX_EXPLODE_FACTOR = 1.5;
 /**
  * InspectMode: analyze a model without touching the scene layout.
  *
- * - Tap picks a piece (select / attach-to-camera, as before).
+ * - Tap picks a piece.
  * - Double tap hides the piece under the finger.
  * - Two-finger pinch drives the exploded view.
  *
@@ -48,9 +47,7 @@ export class InspectMode implements InteractionMode {
         const pickedMesh = this.deps.pickMesh(inputSource);
 
         if (pickedMesh) {
-            pickHelper.handleMeshSelection(pickedMesh, this.deps.getCamera());
-        } else if (pickHelper.attachedParts.length > 0) {
-            pickHelper.attachedParts = [];
+            pickHelper.handleMeshSelection(pickedMesh);
         } else if (pickHelper.selectedMeshes.length > 0) {
             pickHelper.clearSelection();
         }
