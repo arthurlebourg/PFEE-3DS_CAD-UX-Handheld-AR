@@ -1,15 +1,17 @@
-import { createIcons, Settings, Layers, MousePointer, Eye, Activity } from 'lucide';
+import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search } from 'lucide';
 import type { ModeName } from './interactionMode.js';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
  *
- * In prod mode  → gear + Modèles + Mode (Édition/Inspection)
- * In dev mode   → gear + Modèles + Mode + Couleurs picking + Statistiques perf
+ * Quick-access column (always visible in session):
+ *   - Mode toggle: shows the current mode at a glance (icon + colour + caption)
+ *   - Modèles: opens the model carousel
+ * Dev mode adds a gear radial menu with the debug buttons (picking colours,
+ * perf stats); in prod the gear is omitted entirely.
  *
  * The mode button only *requests* a toggle; the ModeManager is the source of
- * truth and reflects the actual mode back through {@link setMode}, which also
- * drives the always-visible mode badge at the top of the screen.
+ * truth and reflects the actual mode back through {@link setMode}.
  *
  * Activated via isDevMode (driven by ?dev=TOKEN in the URL, see devMode.ts).
  */
@@ -17,14 +19,17 @@ export class UIManager {
     public showPickingColors = false;
     public showPerf = false;
 
+    private quickContainer = document.createElement('div');
+    private btnMode = document.createElement('button');
+    private modeCaption = document.createElement('span');
+    private btnModel = document.createElement('button');
+    private modelSelectionPanel = document.createElement('div');
+
+    // Dev-only gear radial menu
     private container = document.createElement('div');
     private btnGear = document.createElement('button');
-    private btnModel = document.createElement('button');
-    private btnMode = document.createElement('button');
     private btnDebug: HTMLButtonElement | null = null;
     private btnPerf: HTMLButtonElement | null = null;
-    private modelSelectionPanel = document.createElement('div');
-    private modeBadge = document.createElement('div');
 
     private isOpen = false;
     private isModelPanelOpen = false;
@@ -53,29 +58,37 @@ export class UIManager {
 
         this.injectStyles();
 
-        // Container
+        // Quick-access column: mode toggle + model carousel button
+        this.quickContainer.className =
+            'ar-quick-container' + (isDevMode ? ' with-gear' : '');
+        this.quickContainer.style.display = 'none';
+
+        this.btnMode.className = 'ar-quick-btn btn-mode edit';
+        this.modeCaption.className = 'ar-quick-caption';
+        const modeItem = document.createElement('div');
+        modeItem.className = 'ar-quick-item';
+        modeItem.append(this.btnMode, this.modeCaption);
+
+        this.btnModel.className = 'ar-quick-btn btn-model';
+        this.btnModel.innerHTML = `<i data-lucide="layers"></i>`;
+        const modelCaption = document.createElement('span');
+        modelCaption.className = 'ar-quick-caption';
+        modelCaption.textContent = 'Modèles';
+        const modelItem = document.createElement('div');
+        modelItem.className = 'ar-quick-item';
+        modelItem.append(this.btnModel, modelCaption);
+
+        this.quickContainer.append(modeItem, modelItem);
+
+        // Dev-only gear radial menu (debug buttons)
         this.container.className = 'ar-menu-container';
         this.container.style.display = 'none';
-
-        // Gear button (main toggle)
         this.btnGear.className = 'ar-menu-btn ar-btn-gear';
         this.btnGear.innerHTML = `<i data-lucide="settings"></i>`;
-
-        // Prod buttons — always present
-        this.btnModel = this.createRadialButton('btn-model', 'layers',        'Modèles');
-        this.btnMode  = this.createRadialButton('btn-mode',  'mouse-pointer', 'Mode: Édition');
-
-        // Dev-only buttons
         if (isDevMode) {
             this.btnDebug = this.createRadialButton('btn-debug', 'eye',      'Couleurs: OFF');
             this.btnPerf  = this.createRadialButton('btn-perf',  'activity', 'Statistiques: OFF');
         }
-
-        // Persistent mode indicator (modal UIs need a strong "which mode am I
-        // in" signal, since the same pinch means scale or explode).
-        this.modeBadge.className = 'ar-mode-badge edit';
-        this.modeBadge.textContent = 'ÉDITION';
-        this.modeBadge.style.display = 'none';
 
         // Model selection panel
         this.modelSelectionPanel.className = 'ar-model-panel';
@@ -96,20 +109,20 @@ export class UIManager {
         }
 
         // Wire up events
-        this.addPointerDownListener(this.btnGear,  () => this.toggleGear());
-        this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
         this.addPointerDownListener(this.btnMode,  () => this.onModeToggle());
+        this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
+        this.addPointerDownListener(this.btnGear,  () => this.toggleGear());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
         // Prevent XR select events from bubbling through the overlay
+        this.quickContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.container.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.modelSelectionPanel.addEventListener('beforexrselect', (e) => e.preventDefault());
 
         this.updateUI();
 
-        // Assemble — dev buttons only appended when present
-        const buttons: HTMLButtonElement[] = [this.btnGear, this.btnModel, this.btnMode];
+        const buttons: HTMLButtonElement[] = [this.btnGear];
         if (this.btnDebug) buttons.push(this.btnDebug);
         if (this.btnPerf)  buttons.push(this.btnPerf);
         this.container.append(...buttons);
@@ -119,13 +132,13 @@ export class UIManager {
      * Attaches the UI to the DOM and hydrates Lucide icon placeholders.
      */
     public attach(parent: HTMLElement): void {
-        parent.appendChild(this.container);
+        parent.appendChild(this.quickContainer);
+        if (this.isDevMode) {
+            parent.appendChild(this.container);
+        }
         parent.appendChild(this.modelSelectionPanel);
-        parent.appendChild(this.modeBadge);
 
-        createIcons({
-            icons: { Settings, Layers, MousePointer, Eye, Activity }
-        });
+        this.hydrateIcons();
     }
 
     // -------------------------------------------------------------------------
@@ -134,16 +147,20 @@ export class UIManager {
 
     /**
      * Reflects the active interaction mode (called by the ModeManager's
-     * onChange). Updates the mode button and the persistent badge.
+     * onChange). The toggle button itself carries the mode state: icon,
+     * colour and caption.
      */
     public setMode(mode: ModeName): void {
         this.mode = mode;
         this.updateUI();
+        this.hydrateIcons();
     }
 
     public toggleVisibility(show: boolean): void {
-        this.container.style.display = show ? 'block' : 'none';
-        this.modeBadge.style.display = show ? 'block' : 'none';
+        this.quickContainer.style.display = show ? 'flex' : 'none';
+        if (this.isDevMode) {
+            this.container.style.display = show ? 'block' : 'none';
+        }
         if (!show) {
             this.isOpen = false;
             this.container.classList.remove('open');
@@ -158,6 +175,12 @@ export class UIManager {
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    private hydrateIcons(): void {
+        createIcons({
+            icons: { Settings, Layers, Eye, Activity, Pencil, Search }
+        });
+    }
 
     private createRadialButton(className: string, iconName: string, labelText: string): HTMLButtonElement {
         const btn = document.createElement('button');
@@ -177,15 +200,12 @@ export class UIManager {
     private toggleGear(): void {
         this.isOpen = !this.isOpen;
         this.container.classList.toggle('open', this.isOpen);
-        if (!this.isOpen) {
-            this.isModelPanelOpen = false;
-            this.modelSelectionPanel.classList.remove('open');
-        }
     }
 
     private toggleModelPanel(): void {
         this.isModelPanelOpen = !this.isModelPanelOpen;
         this.modelSelectionPanel.classList.toggle('open', this.isModelPanelOpen);
+        this.btnModel.classList.toggle('active', this.isModelPanelOpen);
     }
 
     private selectModel(modelName: string): void {
@@ -194,6 +214,7 @@ export class UIManager {
         this.onModelCallback(modelName);
         this.isModelPanelOpen = false;
         this.modelSelectionPanel.classList.remove('open');
+        this.btnModel.classList.remove('active');
     }
 
     private toggleDebug(): void {
@@ -213,18 +234,15 @@ export class UIManager {
     // -------------------------------------------------------------------------
 
     private updateUI(): void {
-        // Mode button + badge
-        const modeLabel = this.btnMode.querySelector('.ar-radial-label')!;
+        // Mode toggle button: the button IS the mode indicator
         if (this.mode === 'edit') {
-            this.btnMode.className = 'ar-menu-btn ar-radial-btn btn-mode active-blue';
-            modeLabel.textContent = 'Mode: Édition';
-            this.modeBadge.className = 'ar-mode-badge edit';
-            this.modeBadge.textContent = 'ÉDITION';
+            this.btnMode.className = 'ar-quick-btn btn-mode edit';
+            this.btnMode.innerHTML = `<i data-lucide="pencil"></i>`;
+            this.modeCaption.textContent = 'Édition';
         } else {
-            this.btnMode.className = 'ar-menu-btn ar-radial-btn btn-mode active-green';
-            modeLabel.textContent = 'Mode: Inspection';
-            this.modeBadge.className = 'ar-mode-badge inspect';
-            this.modeBadge.textContent = 'INSPECTION';
+            this.btnMode.className = 'ar-quick-btn btn-mode inspect';
+            this.btnMode.innerHTML = `<i data-lucide="search"></i>`;
+            this.modeCaption.textContent = 'Inspection';
         }
 
         // Debug button (dev only)
@@ -268,21 +286,80 @@ export class UIManager {
         const style = document.createElement('style');
         style.id = styleId;
 
-        // Prod layout  : 2 radial buttons (model + mode)
-        // Dev layout   : 4 radial buttons (model + mode + debug + perf)
-        // Positions are on a quarter-circle arc, bottom-right origin.
-        const prodPositions = `
-            .ar-menu-container.open .btn-model { transform: translate(-115px, 0) scale(1); }
-            .ar-menu-container.open .btn-mode  { transform: translate(-81.3px, -81.3px) scale(1); }
-        `;
-        const devPositions = `
-            .ar-menu-container.open .btn-model { transform: translate(-115px, 0) scale(1); }
-            .ar-menu-container.open .btn-mode  { transform: translate(-99.6px, -57.5px) scale(1); }
-            .ar-menu-container.open .btn-debug { transform: translate(-57.5px, -99.6px) scale(1); }
-            .ar-menu-container.open .btn-perf  { transform: translate(0, -115px) scale(1); }
-        `;
-
         style.textContent = `
+            .ar-quick-container {
+                position: absolute;
+                bottom: 30px;
+                right: 30px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 18px;
+                z-index: 1000;
+            }
+
+            /* Leave room for the dev gear menu below */
+            .ar-quick-container.with-gear { bottom: 115px; }
+
+            .ar-quick-item {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 5px;
+            }
+
+            .ar-quick-btn {
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                background: rgba(20, 20, 25, 0.75);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                color: #fff;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+                transition: background 0.3s, border-color 0.3s, box-shadow 0.3s;
+                pointer-events: auto;
+                outline: none;
+                padding: 0;
+            }
+
+            .ar-quick-btn:active { transform: scale(0.92); }
+
+            .ar-quick-btn.btn-mode.edit {
+                background: rgba(0, 123, 255, 0.85);
+                border-color: rgba(0, 123, 255, 0.5);
+                box-shadow: 0 0 15px rgba(0, 123, 255, 0.5);
+            }
+
+            .ar-quick-btn.btn-mode.inspect {
+                background: rgba(40, 167, 69, 0.85);
+                border-color: rgba(40, 167, 69, 0.5);
+                box-shadow: 0 0 15px rgba(40, 167, 69, 0.5);
+            }
+
+            .ar-quick-btn.btn-model.active {
+                background: rgba(0, 123, 255, 0.35);
+                border-color: rgba(0, 123, 255, 0.6);
+            }
+
+            .ar-quick-caption {
+                background: rgba(15, 15, 20, 0.9);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                color: #fff;
+                padding: 3px 9px;
+                border-radius: 6px;
+                font-size: 10px;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-weight: 600;
+                white-space: nowrap;
+                pointer-events: none;
+            }
+
             .ar-menu-container {
                 position: absolute;
                 bottom: 30px;
@@ -349,13 +426,12 @@ export class UIManager {
                 transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s, background 0.3s;
             }
 
-            .ar-radial-btn.active-blue  { background: rgba(0, 123, 255, 0.85); border-color: rgba(0, 123, 255, 0.5); box-shadow: 0 0 12px rgba(0, 123, 255, 0.4); }
-            .ar-radial-btn.active-green { background: rgba(40, 167, 69, 0.85);  border-color: rgba(40, 167, 69, 0.5);  box-shadow: 0 0 12px rgba(40, 167, 69, 0.4); }
-            .ar-radial-btn.active-red   { background: rgba(220, 53, 69, 0.85);  border-color: rgba(220, 53, 69, 0.5);  box-shadow: 0 0 12px rgba(220, 53, 69, 0.4); }
+            .ar-radial-btn.active-red { background: rgba(220, 53, 69, 0.85); border-color: rgba(220, 53, 69, 0.5); box-shadow: 0 0 12px rgba(220, 53, 69, 0.4); }
 
             .ar-menu-container.open .ar-radial-btn { pointer-events: auto; opacity: 1; }
 
-            ${this.isDevMode ? devPositions : prodPositions}
+            .ar-menu-container.open .btn-debug { transform: translate(-115px, 0) scale(1); }
+            .ar-menu-container.open .btn-perf  { transform: translate(-81.3px, -81.3px) scale(1); }
 
             .ar-radial-label {
                 position: absolute;
@@ -380,37 +456,6 @@ export class UIManager {
             .ar-menu-container.open .ar-radial-btn .ar-radial-label {
                 opacity: 1;
                 transform: translateY(-50%) scale(1);
-            }
-
-            .ar-mode-badge {
-                position: absolute;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                padding: 6px 18px;
-                border-radius: 999px;
-                border: 1px solid;
-                color: #fff;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 2px;
-                backdrop-filter: blur(10px);
-                -webkit-backdrop-filter: blur(10px);
-                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-                z-index: 1000;
-                pointer-events: none;
-                transition: background 0.3s, border-color 0.3s;
-            }
-
-            .ar-mode-badge.edit {
-                background: rgba(0, 123, 255, 0.55);
-                border-color: rgba(0, 123, 255, 0.8);
-            }
-
-            .ar-mode-badge.inspect {
-                background: rgba(40, 167, 69, 0.55);
-                border-color: rgba(40, 167, 69, 0.8);
             }
 
             .ar-model-panel {

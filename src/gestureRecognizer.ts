@@ -8,7 +8,7 @@ const DOUBLE_TAP_WINDOW_MS = 300;
 /** A pinch reaches full scale once fingers spread across ~60% of the short screen edge. */
 const PINCH_SPREAD_FRACTION = 0.6;
 /** Touches starting on interactive UI never become scene gestures. */
-const UI_SELECTOR = '.ar-menu-container, .ar-model-panel';
+const UI_SELECTOR = '.ar-menu-container, .ar-model-panel, .ar-quick-container';
 
 /**
  * GestureRecognizer: sole owner of raw touch input over the AR view.
