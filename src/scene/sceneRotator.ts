@@ -32,6 +32,24 @@ export class SceneRotator {
         xrRig.quaternion.identity();
     }
 
+    public getAngle(): number {
+        return this.angle;
+    }
+
+    public setAngle(
+        angle: number,
+        xrRig: THREE.Group,
+        objects: THREE.Object3D[],
+    ): void {
+        this.angle = angle;
+        if (objects.length === 0) {
+            xrRig.position.set(0, 0, 0);
+            xrRig.quaternion.identity();
+            return;
+        }
+        this.applyRotation(xrRig, objects);
+    }
+
     private applyRotation(
         xrRig: THREE.Group,
         objects: THREE.Object3D[],

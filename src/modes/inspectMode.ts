@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { InteractionMode, PinchState } from './interactionMode.js';
 import { clamp } from './interactionMode.js';
 import type { PickHelper } from '../scene/picking.js';
+import type { HistoryAction } from '../history/historyManager.js';
 
 interface InspectModeDeps {
     pickHelper: PickHelper;
@@ -9,6 +10,8 @@ interface InspectModeDeps {
     pickMesh(inputSource?: XRInputSource): THREE.Mesh | null;
     /** Drives the exploded view; 0 = assembled. */
     onExplode(factor: number): void;
+    /** Pushes an undoable action to the inspect history stack. */
+    onAction?: (action: HistoryAction) => void;
 }
 
 /** Parts never fly further than this explosion factor. */
@@ -20,9 +23,6 @@ const MAX_EXPLODE_FACTOR = 1.5;
  * - Tap picks a piece.
  * - Double tap hides the piece under the finger.
  * - Two-finger pinch drives the exploded view.
- *
- * TODO(inspect): explode only the selected model once model-level selection
- * lands; granularity slider, undo/redo and hierarchy panel come later.
  */
 export class InspectMode implements InteractionMode {
     public readonly name = 'inspect';
@@ -31,11 +31,26 @@ export class InspectMode implements InteractionMode {
 
     private committedExplode = 0;
     private currentExplode = 0;
+    private pinchStartExplode = 0;
 
     private hiddenMeshes: THREE.Mesh[] = [];
 
     constructor(deps: InspectModeDeps) {
         this.deps = deps;
+    }
+
+    public getExplodeFactor(): number {
+        return this.committedExplode;
+    }
+
+    public getHiddenMeshes(): readonly THREE.Mesh[] {
+        return this.hiddenMeshes;
+    }
+
+    public setExplodeFactor(factor: number): void {
+        this.committedExplode = clamp(factor, 0, MAX_EXPLODE_FACTOR);
+        this.currentExplode = this.committedExplode;
+        this.deps.onExplode(this.committedExplode);
     }
 
     public enter(): void {}
@@ -63,6 +78,24 @@ export class InspectMode implements InteractionMode {
 
         mesh.visible = false;
         this.hiddenMeshes.push(mesh);
+
+        this.deps.onAction?.({
+            description: 'Masquer pièce',
+            undo: () => {
+                mesh.visible = true;
+                const index = this.hiddenMeshes.indexOf(mesh);
+                if (index !== -1) {
+                    this.hiddenMeshes.splice(index, 1);
+                }
+            },
+            redo: () => {
+                this.deps.pickHelper.deselectMesh(mesh);
+                mesh.visible = false;
+                if (!this.hiddenMeshes.includes(mesh)) {
+                    this.hiddenMeshes.push(mesh);
+                }
+            },
+        });
     }
 
     /**
@@ -75,12 +108,39 @@ export class InspectMode implements InteractionMode {
         this.currentExplode = 0;
     }
 
-    /** Reveals every piece hidden by double tap (future "show all" UI button). */
-    public showAllHidden(): void {
-        for (const mesh of this.hiddenMeshes) {
+    /** Reveals every piece hidden by double tap. */
+    public showAllHidden(recordAction = false): void {
+        if (this.hiddenMeshes.length === 0) return;
+
+        const previouslyHidden = [...this.hiddenMeshes];
+        for (const mesh of previouslyHidden) {
             mesh.visible = true;
         }
         this.hiddenMeshes = [];
+
+        if (recordAction) {
+            this.deps.onAction?.({
+                description: 'Afficher toutes les pièces',
+                undo: () => {
+                    for (const mesh of previouslyHidden) {
+                        mesh.visible = false;
+                        if (!this.hiddenMeshes.includes(mesh)) {
+                            this.hiddenMeshes.push(mesh);
+                        }
+                    }
+                },
+                redo: () => {
+                    for (const mesh of previouslyHidden) {
+                        mesh.visible = true;
+                    }
+                    this.hiddenMeshes = [];
+                },
+            });
+        }
+    }
+
+    public onPinchStart(): void {
+        this.pinchStartExplode = this.committedExplode;
     }
 
     public onPinchMove(pinch: PinchState): void {
@@ -93,6 +153,20 @@ export class InspectMode implements InteractionMode {
     }
 
     public onPinchEnd(): void {
+        const start = this.pinchStartExplode;
+        const end = this.currentExplode;
         this.committedExplode = this.currentExplode;
+
+        if (Math.abs(end - start) > 0.01) {
+            this.deps.onAction?.({
+                description: 'Éclatement de la vue',
+                undo: () => {
+                    this.setExplodeFactor(start);
+                },
+                redo: () => {
+                    this.setExplodeFactor(end);
+                },
+            });
+        }
     }
 }
