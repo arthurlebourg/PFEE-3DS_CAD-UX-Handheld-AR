@@ -12,6 +12,7 @@ import { VirtualJoycon } from './virtualJoycon.js';
 import { PinchScale } from './pinchScale.js';
 import { SceneRotator } from './sceneRotator.js';
 import { gestureArbiter, GestureType } from './gestureArbiter.js';
+import { Occlusion } from './occlusion.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const modelUrls: Record<string, string> = {};
@@ -58,6 +59,7 @@ let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
 let hierarchySlider: HierarchySlider;
 let perf: PerfProbe;
+let occlusion: Occlusion;
 
 init();
 
@@ -92,6 +94,8 @@ function init(): void {
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    occlusion = new Occlusion(scene, renderer);
 
     controller1 = renderer.xr.getController(0);
     controller1.addEventListener('select', (event) => { onSelect(event.data); });
@@ -155,8 +159,9 @@ function init(): void {
     } else {
         const arButtonOptions = {
             requiredFeatures: ['hit-test'],
-            optionalFeatures: ['dom-overlay'],
-            domOverlay: { root: document.body }
+            optionalFeatures: ['dom-overlay', 'depth-sensing'],
+            domOverlay: { root: document.body },
+            depthSensing: Occlusion.sessionInit,
         };
         document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
 
@@ -365,6 +370,7 @@ function onWindowResize(): void {
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
     devTick?.();
+    occlusion.update(frame);
 
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
