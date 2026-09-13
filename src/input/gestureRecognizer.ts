@@ -9,7 +9,14 @@ const DOUBLE_TAP_WINDOW_MS = 300;
 const PINCH_SPREAD_FRACTION = 0.6;
 /** Touches starting on interactive UI never become scene gestures. */
 const UI_SELECTOR =
-    '.ar-menu-container, .ar-model-panel, .ar-quick-container, .ar-delete-btn, .ar-reset-btn';
+    '.ar-menu-container, .ar-model-panel, .ar-quick-container, .ar-delete-btn, .ar-reset-btn, ' +
+    '.ar-help-btn, .ar-tutorial-card, .ar-tutorial-modal, .ar-cheatsheet';
+
+/**
+ * Gesture vocabulary, as classified here. Observers get the raw gesture — what
+ * the fingers did — not what it achieved in the scene.
+ */
+export type GestureKind = 'tap' | 'doubleTap' | 'holdStart' | 'pinchStart';
 
 /**
  * GestureRecognizer: sole owner of raw touch input over the AR view.
@@ -26,6 +33,8 @@ const UI_SELECTOR =
  */
 export class GestureRecognizer {
     private readonly modeManager: ModeManager;
+    /** Read-only observer (the tutorial). Never intercepts: modes still run. */
+    private readonly onGesture?: (gesture: GestureKind) => void;
 
     private holdTimer: number | null = null;
     private holdActive = false;
@@ -43,8 +52,9 @@ export class GestureRecognizer {
     private pinchStartDistance = 0;
     private lastTapTime = 0;
 
-    constructor(modeManager: ModeManager) {
+    constructor(modeManager: ModeManager, onGesture?: (gesture: GestureKind) => void) {
         this.modeManager = modeManager;
+        this.onGesture = onGesture;
     }
 
     public attach(parent: HTMLElement): void {
@@ -88,11 +98,13 @@ export class GestureRecognizer {
 
         if (isDoubleTap && mode.onDoubleTap) {
             this.lastTapTime = 0;
+            this.onGesture?.('doubleTap');
             mode.onDoubleTap(inputSource);
             return;
         }
 
         this.lastTapTime = now;
+        this.onGesture?.('tap');
         mode.onTap?.(inputSource);
     }
 
@@ -115,6 +127,7 @@ export class GestureRecognizer {
             this.holdTimer = window.setTimeout(() => {
                 this.holdActive = true;
                 this.suppressNextSelect = true;
+                this.onGesture?.('holdStart');
                 this.modeManager.current.onHoldStart?.(this.startX, this.startY);
             }, HOLD_DELAY_MS);
             return;
@@ -132,6 +145,7 @@ export class GestureRecognizer {
             this.pinchStartDistance = this.touchDistance(event.touches);
             this.pinchActive = true;
             this.suppressNextSelect = true;
+            this.onGesture?.('pinchStart');
             this.modeManager.current.onPinchStart?.();
 
             event.preventDefault();
