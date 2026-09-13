@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, MousePointer, Eye, EyeOff,  Activity } from 'lucide';
+import { createIcons, Settings, Layers, MousePointer, Eye, Activity, List } from 'lucide';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
@@ -17,7 +17,7 @@ export class UIManager {
     private btnGear = document.createElement('button');
     private btnModel = document.createElement('button');
     private btnMode = document.createElement('button');
-    private btnHide = document.createElement('button');
+    private btnHierarchy = document.createElement('button');
     private btnDebug: HTMLButtonElement | null = null;
     private btnPerf: HTMLButtonElement | null = null;
     private modelSelectionPanel = document.createElement('div');
@@ -26,6 +26,7 @@ export class UIManager {
     private isModelPanelOpen = false;
     private activeModelName = '';
     private readonly isDevMode: boolean;
+    public showHierarchy = false;
 
     // Scale controls
     private sliderContainer = document.createElement('div');
@@ -39,15 +40,15 @@ export class UIManager {
     private onModelCallback: (modelName: string) => void;
     private onPerfCallback: (showPerf: boolean) => void;
     private onScaleCallback: (rigScale: number) => void;
+    private onHierarchyCallback: (show: boolean) => void;
 
-    private onHideCallback: () => void;
     constructor(
         onModeCallback: (p: boolean) => void,
         onDebugCallback: (d: boolean) => void,
         onModelCallback: (m: string) => void,
         onPerfCallback: (s: boolean) => void,
         onScaleCallback: (scale: number) => void,
-        onHideCallback: () => void, 
+        onHierarchyCallback: (show: boolean) => void,
         models: string[],
         isDevMode = false
     ) {
@@ -56,6 +57,7 @@ export class UIManager {
         this.onModelCallback = onModelCallback;
         this.onPerfCallback = onPerfCallback;
         this.onScaleCallback = onScaleCallback;
+        this.onHierarchyCallback = onHierarchyCallback;
         this.isDevMode = isDevMode;
 
         this.injectStyles();
@@ -69,9 +71,10 @@ export class UIManager {
         this.btnGear.innerHTML = `<i data-lucide="settings"></i>`;
 
         // Prod buttons — always present
-        this.btnModel = this.createRadialButton('btn-model', 'layers',        'Modèles');
-        this.btnMode  = this.createRadialButton('btn-mode',  'mouse-pointer', 'Mode: Placer');
-        this.btnHide = this.createRadialButton('btn-hide', 'eye-off', 'Masquer');
+        this.btnModel     = this.createRadialButton('btn-model',     'layers',        'Modèles');
+        this.btnMode      = this.createRadialButton('btn-mode',      'mouse-pointer', 'Mode: Placer');
+        this.btnHierarchy = this.createRadialButton('btn-hierarchy', 'list',          'Hiérarchie');
+
         // Dev-only buttons
         if (isDevMode) {
             this.btnDebug = this.createRadialButton('btn-debug', 'eye',      'Couleurs: OFF');
@@ -121,10 +124,10 @@ export class UIManager {
         });
 
         // Wire up events
-        this.addPointerDownListener(this.btnGear,  () => this.toggleGear());
-        this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
-        this.addPointerDownListener(this.btnMode,  () => this.toggleMode());
-        this.addPointerDownListener(this.btnHide, () => this.onHideCallback());
+        this.addPointerDownListener(this.btnGear,      () => this.toggleGear());
+        this.addPointerDownListener(this.btnModel,     () => this.toggleModelPanel());
+        this.addPointerDownListener(this.btnMode,      () => this.toggleMode());
+        this.addPointerDownListener(this.btnHierarchy, () => this.toggleHierarchy());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
@@ -135,7 +138,7 @@ export class UIManager {
         this.updateUI();
 
         // Assemble — dev buttons only appended when present
-        const buttons: HTMLButtonElement[] = [this.btnGear, this.btnModel, this.btnMode];
+        const buttons: HTMLButtonElement[] = [this.btnGear, this.btnModel, this.btnMode, this.btnHierarchy];
         if (this.btnDebug) buttons.push(this.btnDebug);
         if (this.btnPerf)  buttons.push(this.btnPerf);
         this.container.append(...buttons, this.sliderContainer);
@@ -149,7 +152,7 @@ export class UIManager {
         parent.appendChild(this.modelSelectionPanel);
 
         createIcons({
-            icons: { Settings, Layers, MousePointer, Eye, EyeOff,  Activity }
+            icons: { Settings, Layers, MousePointer, Eye, Activity, List }
         });
     }
 
@@ -233,6 +236,12 @@ export class UIManager {
         this.onModeCallback(this.isPlacementMode);
     }
 
+    private toggleHierarchy(): void {
+        this.showHierarchy = !this.showHierarchy;
+        this.updateUI();
+        this.onHierarchyCallback(this.showHierarchy);
+    }
+
     private toggleDebug(): void {
         this.showPickingColors = !this.showPickingColors;
         this.updateUI();
@@ -258,6 +267,16 @@ export class UIManager {
         } else {
             this.btnMode.className = 'ar-menu-btn ar-radial-btn btn-mode active-green';
             modeLabel.textContent = 'Mode: Sélectionner';
+        }
+
+        // Hierarchy button
+        const hierarchyLabel = this.btnHierarchy.querySelector('.ar-radial-label')!;
+        if (this.showHierarchy) {
+            this.btnHierarchy.className = 'ar-menu-btn ar-radial-btn btn-hierarchy active-green';
+            hierarchyLabel.textContent = 'Hiérarchie: ON';
+        } else {
+            this.btnHierarchy.className = 'ar-menu-btn ar-radial-btn btn-hierarchy';
+            hierarchyLabel.textContent = 'Hiérarchie';
         }
 
         // Debug button (dev only)
@@ -304,17 +323,19 @@ export class UIManager {
         // Prod layout  : 2 radial buttons (model + mode)
         // Dev layout   : 4 radial buttons (model + mode + debug + perf)
         // Positions are on a quarter-circle arc, bottom-right origin.
+        // Prod: 3 buttons on a quarter-circle arc (r=115px) at 0°, 45°, 90°
         const prodPositions = `
-            .ar-menu-container.open .btn-model { transform: translate(-115px, 0) scale(1); }
-            .ar-menu-container.open .btn-mode  { transform: translate(-81.3px, -81.3px) scale(1); }
-            .ar-menu-container.open .btn-hide  { transform: translate(-57.5px, -99.6px) scale(1); }
+            .ar-menu-container.open .btn-model     { transform: translate(-115px, 0) scale(1); }
+            .ar-menu-container.open .btn-mode      { transform: translate(-81.3px, -81.3px) scale(1); }
+            .ar-menu-container.open .btn-hierarchy { transform: translate(0, -115px) scale(1); }
         `;
+        // Dev: 5 buttons at 0°, 22.5°, 45°, 67.5°, 90°
         const devPositions = `
-            .ar-menu-container.open .btn-model { transform: translate(-115px, 0) scale(1); }
-            .ar-menu-container.open .btn-mode  { transform: translate(-99.6px, -57.5px) scale(1); }
-            .ar-menu-container.open .btn-hide  { transform: translate(-81.3px, -81.3px) scale(1); }
-            .ar-menu-container.open .btn-debug { transform: translate(-57.5px, -99.6px) scale(1); }
-            .ar-menu-container.open .btn-perf  { transform: translate(0, -115px) scale(1); }
+            .ar-menu-container.open .btn-model     { transform: translate(-115px, 0) scale(1); }
+            .ar-menu-container.open .btn-mode      { transform: translate(-106.3px, -44.0px) scale(1); }
+            .ar-menu-container.open .btn-hierarchy { transform: translate(-81.3px, -81.3px) scale(1); }
+            .ar-menu-container.open .btn-debug     { transform: translate(-44.0px, -106.3px) scale(1); }
+            .ar-menu-container.open .btn-perf      { transform: translate(0, -115px) scale(1); }
         `;
 
         style.textContent = `

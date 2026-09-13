@@ -278,6 +278,12 @@ export class PickHelper {
         }
     }
 
+    public deselectMesh(mesh: THREE.Mesh): void {
+        this.removeHighlight(mesh);
+        this.selectedMeshes = this.selectedMeshes.filter((m) => m !== mesh);
+        this.attachedParts = this.attachedParts.filter((p) => p.mesh !== mesh);
+    }
+
     /**
      * Drops all attached pieces and clears the current selection.
      */
