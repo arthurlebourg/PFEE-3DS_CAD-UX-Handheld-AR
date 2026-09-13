@@ -110,6 +110,7 @@ function init(): void {
             onModelSelect: (modelName) => loadModel(modelName),
             onDelete: () => deleteSelectedModel(),
             onReset: () => resetSelectedModel(),
+            onInvertSelection: () => invertSelection(),
             onPerfToggle: (showPerf) => perf.setVisible(showPerf),
         },
         availableModels,
@@ -202,6 +203,11 @@ function init(): void {
     }
 
     window.addEventListener('resize', onWindowResize);
+    window.addEventListener('keydown', (event) => {
+        if (event.key === 'i' || event.key === 'I') {
+            invertSelection();
+        }
+    });
 }
 
 /**
@@ -427,6 +433,17 @@ function resetSelectedModel(): void {
     }
 
     sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Inverts the current piece selection in Inspect mode (or globally).
+ */
+function invertSelection(): void {
+    if (modeManager.currentName === 'inspect') {
+        inspectMode.invertSelection();
+    } else {
+        pickHelper.invertSelection();
+    }
 }
 
 /**

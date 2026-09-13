@@ -290,6 +290,45 @@ export class PickHelper {
         this.selectedMeshes = [];
     }
 
+    /**
+     * Checks whether a mesh and all its ancestors are visible.
+     */
+    private isMeshVisible(mesh: THREE.Mesh): boolean {
+        let curr: THREE.Object3D | null = mesh;
+        while (curr) {
+            if (!curr.visible) return false;
+            curr = curr.parent;
+        }
+        return true;
+    }
+
+    /**
+     * Inverts the current mesh selection: selects all unselected visible meshes
+     * and deselects all currently selected meshes.
+     */
+    public invertSelection(): void {
+        const uniqueMeshes = Array.from(new Set(this.idToMeshMap.values()));
+        const nextSelected: THREE.Mesh[] = [];
+
+        for (const mesh of uniqueMeshes) {
+            if (!this.isMeshVisible(mesh)) {
+                if (this.selectedMeshes.includes(mesh)) {
+                    this.removeHighlight(mesh);
+                }
+                continue;
+            }
+
+            if (this.selectedMeshes.includes(mesh)) {
+                this.removeHighlight(mesh);
+            } else {
+                this.highlightMesh(mesh);
+                nextSelected.push(mesh);
+            }
+        }
+
+        this.selectedMeshes = nextSelected;
+    }
+
 
 
     /**
