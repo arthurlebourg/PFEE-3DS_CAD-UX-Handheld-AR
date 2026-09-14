@@ -225,7 +225,6 @@ export class UIManager {
     public setMode(mode: ModeName): void {
         this.mode = mode;
         this.updateUI();
-        this.hydrateIcons();
     }
 
     /** Shows/hides the contextual Delete/Reset buttons (Edit model selection). */
@@ -367,6 +366,12 @@ export class UIManager {
         // Invert button: visible in inspect mode when UI is active
         const isSessionActive = this.quickContainer.style.display !== 'none';
         this.btnInvert.classList.toggle('visible', isSessionActive && this.mode === 'inspect');
+
+        // The mode button was just rewritten as a bare <i data-lucide> placeholder,
+        // which draws nothing until Lucide swaps it for an <svg>. Re-hydrating here
+        // rather than in each caller keeps every path through updateUI honest —
+        // selecting a model used to leave the mode button blank.
+        this.hydrateIcons();
     }
 
     // -------------------------------------------------------------------------
