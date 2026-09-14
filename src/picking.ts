@@ -1,11 +1,6 @@
 import * as THREE from 'three';
 import type { PerfProbe } from './perf.js';
 
-interface AttachedPart {
-    mesh: THREE.Mesh;
-    offsetMatrix: THREE.Matrix4;
-}
-
 type MaterialBackup = { mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] };
 
 /** Layer the pick camera renders in isolation, so only pickable meshes hit the id buffer. */
@@ -23,7 +18,6 @@ export class PickHelper {
     public pickingTexture: THREE.WebGLRenderTarget;
 
     public selectedMeshes: THREE.Mesh[] = [];
-    public attachedParts: AttachedPart[] = [];
 
     private idToMeshMap = new Map<number, THREE.Mesh>();
     private nextId = 1;
@@ -102,28 +96,8 @@ export class PickHelper {
                 }
             }
             this.selectedMeshes = this.selectedMeshes.filter((m) => m !== child);
-            this.attachedParts = this.attachedParts.filter((p) => p.mesh !== child);
             (child.userData.pickMaterial as THREE.Material | undefined)?.dispose();
         });
-    }
-
-    /**
-     * Smoothly updates the position of all attached parts to follow the camera.
-     */
-    public updateAttachedMeshes(camera: THREE.Camera) {
-        if (this.attachedParts.length === 0) {
-            return;
-        }
-
-        for (const part of this.attachedParts) {
-            if (!part.mesh.parent) continue;
-
-            const targetWorldMatrix = new THREE.Matrix4().multiplyMatrices(camera.matrixWorld, part.offsetMatrix);
-            const targetWorldPos = new THREE.Vector3().setFromMatrixPosition(targetWorldMatrix);
-
-            part.mesh.parent.worldToLocal(targetWorldPos);
-            part.mesh.position.lerp(targetWorldPos, 0.15);
-        }
     }
 
     /**
@@ -246,33 +220,26 @@ export class PickHelper {
     }
 
     /**
-     * Handles the interaction logic for selecting, multi-selecting, and attaching meshes.
+     * Adds a picked mesh to the selection. Re-picking a selected mesh does
+     * nothing: parts are selected and highlighted, never moved.
      */
-    public handleMeshSelection(pickedMesh: THREE.Mesh, camera: THREE.Camera) {
-        const isAlreadySelected = this.selectedMeshes.includes(pickedMesh);
-
-        if (isAlreadySelected) {
-            if (this.attachedParts.length > 0) {
-                this.attachedParts = [];
-            } else {
-                this.attachSelectedMeshesToCamera(camera);
-            }
-        } else {
-            this.selectedMeshes.push(pickedMesh);
-            this.highlightMesh(pickedMesh);
-            this.attachedParts = [];
+    public handleMeshSelection(pickedMesh: THREE.Mesh) {
+        if (this.selectedMeshes.includes(pickedMesh)) {
+            return;
         }
+
+        this.selectedMeshes.push(pickedMesh);
+        this.highlightMesh(pickedMesh);
     }
 
     /**
-     * Drops all attached pieces and clears the current selection.
+     * Clears the current selection.
      */
     public clearSelection() {
         for (const mesh of this.selectedMeshes) {
             this.removeHighlight(mesh);
         }
         this.selectedMeshes = [];
-        this.attachedParts = [];
     }
 
     public getSelectableAncestorChain(mesh: THREE.Mesh): THREE.Object3D[] {
@@ -301,28 +268,9 @@ export class PickHelper {
         for (const mesh of this.selectedMeshes) {
             this.removeHighlight(mesh);
         }
-        this.attachedParts = [];
         this.selectedMeshes = meshes;
         for (const mesh of meshes) {
             this.highlightMesh(mesh);
-        }
-    }
-
-    /**
-     * Binds all currently selected meshes to the camera for grouped movement.
-     */
-    private attachSelectedMeshesToCamera(camera: THREE.Camera) {
-        this.attachedParts = [];
-        const cameraInverse = camera.matrixWorldInverse.clone();
-
-        for (const mesh of this.selectedMeshes) {
-            const meshWorldMatrix = mesh.matrixWorld;
-            const offsetMatrix = new THREE.Matrix4().multiplyMatrices(cameraInverse, meshWorldMatrix);
-
-            this.attachedParts.push({
-                mesh: mesh,
-                offsetMatrix: offsetMatrix
-            });
         }
     }
 

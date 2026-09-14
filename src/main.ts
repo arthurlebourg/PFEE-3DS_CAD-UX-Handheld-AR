@@ -256,12 +256,10 @@ function onSelect(inputSource?: XRInputSource): void {
 
         if (pickedMesh) {
             const isNewSelection = !pickHelper.selectedMeshes.includes(pickedMesh);
-            pickHelper.handleMeshSelection(pickedMesh, camera);
+            pickHelper.handleMeshSelection(pickedMesh);
             if (isNewSelection) {
                 hierarchySlider.setHierarchy(pickHelper.getSelectableAncestorChain(pickedMesh));
             }
-        } else if (pickHelper.attachedParts.length > 0) {
-            pickHelper.attachedParts = [];
         } else if (pickHelper.selectedMeshes.length > 0) {
             pickHelper.clearSelection();
             hierarchySlider.hide();
@@ -424,8 +422,6 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             }
         }
     }
-
-    pickHelper.updateAttachedMeshes(camera);
 
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
