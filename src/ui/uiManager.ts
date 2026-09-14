@@ -174,7 +174,6 @@ export class UIManager {
     public setMode(mode: ModeName): void {
         this.mode = mode;
         this.updateUI();
-        this.hydrateIcons();
     }
 
     /** Shows/hides the contextual Delete/Reset buttons (Edit model selection). */
@@ -302,6 +301,12 @@ export class UIManager {
         this.modelSelectionPanel.querySelectorAll('.ar-model-card').forEach((card) => {
             card.classList.toggle('active', card.getAttribute('data-model') === this.activeModelName);
         });
+
+        // The mode button was just rewritten as a bare <i data-lucide> placeholder,
+        // which draws nothing until Lucide swaps it for an <svg>. Re-hydrating here
+        // rather than in each caller keeps every path through updateUI honest —
+        // selecting a model used to leave the mode button blank.
+        this.hydrateIcons();
     }
 
     // -------------------------------------------------------------------------
