@@ -533,6 +533,9 @@ function invertSelection(): void {
     } else {
         pickHelper.invertSelection();
     }
+}
+
+/**
  * Resets the model currently selected in Edit mode: reassembles its parts
  * (undoing explode and hidden pieces), restores its
  * original pose and scale, and resets the rig rotation and perceived scale.
