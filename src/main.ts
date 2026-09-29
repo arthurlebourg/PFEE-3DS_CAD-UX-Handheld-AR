@@ -13,6 +13,7 @@ import { GestureRecognizer } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
 import { EditMode } from './modes/editMode.js';
 import { InspectMode } from './modes/inspectMode.js';
+import { ModeHistoryManager } from './history/historyManager.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -58,6 +59,8 @@ let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let editMode: EditMode;
 let inspectMode: InspectMode;
+let historyManager: ModeHistoryManager;
+let rotateStartAngle = 0;
 
 init();
 
@@ -104,12 +107,18 @@ function init(): void {
     perf = new PerfProbe({ visible: false });
     perf.mount(document.body);
 
+    historyManager = new ModeHistoryManager('edit', (canUndo, canRedo) => {
+        uiManager?.updateHistoryState(canUndo, canRedo);
+    });
+
     uiManager = new UIManager(
         {
             onModeToggle: () => modeManager.toggle(),
             onModelSelect: (modelName) => loadModel(modelName),
             onDelete: () => deleteSelectedModel(),
             onReset: () => resetSelectedModel(),
+            onUndo: () => historyManager.undo(),
+            onRedo: () => historyManager.redo(),
             onPerfToggle: (showPerf) => perf.setVisible(showPerf),
         },
         availableModels,
@@ -117,6 +126,7 @@ function init(): void {
     );
 
     uiManager.attach(document.body);
+    historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
     const joystick = new JoystickWidget((strength) => {
@@ -155,6 +165,27 @@ function init(): void {
         onSelectionChange: (model) => {
             uiManager.setModelActionsVisible(model !== null);
         },
+        onAction: (action) => {
+            historyManager.push('edit', action);
+        },
+        onRotateStart: () => {
+            rotateStartAngle = sceneRotator.getAngle();
+        },
+        onRotateEnd: () => {
+            const start = rotateStartAngle;
+            const end = sceneRotator.getAngle();
+            if (Math.abs(end - start) > 0.01) {
+                historyManager.push('edit', {
+                    description: 'Rotation scène',
+                    undo: () => {
+                        sceneRotator.setAngle(start, xrRig, placedModels);
+                    },
+                    redo: () => {
+                        sceneRotator.setAngle(end, xrRig, placedModels);
+                    },
+                });
+            }
+        },
     });
 
     inspectMode = new InspectMode({
@@ -163,10 +194,14 @@ function init(): void {
         onExplode: (factor) => {
             explode(factor);
         },
+        onAction: (action) => {
+            historyManager.push('inspect', action);
+        },
     });
 
     modeManager = new ModeManager(editMode, inspectMode, (mode) => {
         uiManager.setMode(mode);
+        historyManager.setMode(mode);
         if (mode === 'inspect' && previewModel) {
             previewModel.visible = false;
         }
@@ -332,6 +367,29 @@ function placeModel(): void {
     placedModels.push(model);
     pickHelper.registerModel(model);
     sceneRotator.refresh(xrRig, placedModels);
+
+    historyManager.push('edit', {
+        description: 'Placer modèle',
+        undo: () => {
+            if (editMode.selectedModel === model) {
+                editMode.clearSelection();
+                pickHelper.clearSelection();
+            }
+            pickHelper.removeModel(model);
+            scene.remove(model);
+            const idx = placedModels.indexOf(model);
+            if (idx !== -1) {
+                placedModels.splice(idx, 1);
+            }
+            sceneRotator.refresh(xrRig, placedModels);
+        },
+        redo: () => {
+            scene.add(model);
+            placedModels.push(model);
+            pickHelper.registerModel(model);
+            sceneRotator.refresh(xrRig, placedModels);
+        },
+    });
 }
 
 /**
@@ -355,6 +413,9 @@ function deleteSelectedModel(): void {
     const model = editMode.selectedModel;
     if (!model) return;
 
+    const index = placedModels.indexOf(model);
+    const wasDevModel = (model === devModel);
+
     // Unhighlights the model and hides the Delete/Reset buttons.
     editMode.clearSelection();
     pickHelper.clearSelection();
@@ -362,7 +423,6 @@ function deleteSelectedModel(): void {
     pickHelper.removeModel(model);
     scene.remove(model);
 
-    const index = placedModels.indexOf(model);
     if (index !== -1) {
         placedModels.splice(index, 1);
     }
@@ -371,21 +431,50 @@ function deleteSelectedModel(): void {
     }
 
     sceneRotator.refresh(xrRig, placedModels);
+
+    historyManager.push('edit', {
+        description: 'Supprimer modèle',
+        undo: () => {
+            scene.add(model);
+            if (index >= 0 && index <= placedModels.length) {
+                placedModels.splice(index, 0, model);
+            } else {
+                placedModels.push(model);
+            }
+            if (wasDevModel) {
+                devModel = model;
+            }
+            pickHelper.registerModel(model);
+            sceneRotator.refresh(xrRig, placedModels);
+            editMode.selectModel(model);
+        },
+        redo: () => {
+            if (editMode.selectedModel === model) {
+                editMode.clearSelection();
+                pickHelper.clearSelection();
+            }
+            pickHelper.removeModel(model);
+            scene.remove(model);
+            const idx = placedModels.indexOf(model);
+            if (idx !== -1) {
+                placedModels.splice(idx, 1);
+            }
+            if (model === devModel) {
+                devModel = null;
+            }
+            sceneRotator.refresh(xrRig, placedModels);
+        },
+    });
 }
 
 /**
- * Resets the model currently selected in Edit mode: reassembles its parts
- * (undoing explode and hidden pieces), restores its
- * original pose and scale, and resets the rig rotation and perceived scale.
+ * Executes the actual reset of transforms and inspect state on a model.
  */
-function resetSelectedModel(): void {
-    const model = editMode.selectedModel;
-    if (!model) return;
-
+function doResetModel(model: THREE.Object3D): void {
     // Drop Inspect-side state first: piece selection, hidden pieces, and the
     // committed explode factor (positions are restored below).
     pickHelper.clearSelection();
-    inspectMode.showAllHidden();
+    inspectMode.showAllHidden(false);
     inspectMode.resetExplodeState();
 
     // Reset camera rig rotation and perceived scale to their default values.
@@ -427,6 +516,73 @@ function resetSelectedModel(): void {
     }
 
     sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Resets the model currently selected in Edit mode: reassembles its parts
+ * (undoing explode and hidden pieces), restores its
+ * original pose and scale, and resets the rig rotation and perceived scale.
+ */
+function resetSelectedModel(): void {
+    const model = editMode.selectedModel;
+    if (!model) return;
+
+    // Snapshot state before reset
+    const prevModelPos = model.position.clone();
+    const prevModelQuat = model.quaternion.clone();
+    const prevModelScale = model.scale.clone();
+
+    const meshTransforms = new Map<THREE.Mesh, {
+        position: THREE.Vector3;
+        quaternion: THREE.Quaternion;
+        scale: THREE.Vector3;
+        visible: boolean;
+    }>();
+
+    model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const mesh = child as THREE.Mesh;
+        meshTransforms.set(mesh, {
+            position: mesh.position.clone(),
+            quaternion: mesh.quaternion.clone(),
+            scale: mesh.scale.clone(),
+            visible: mesh.visible,
+        });
+    });
+
+    const previousRigScale = rigScale;
+    const previousRigAngle = sceneRotator.getAngle();
+    const previousExplodeFactor = inspectMode.getExplodeFactor();
+
+    doResetModel(model);
+
+    historyManager.push('edit', {
+        description: 'Réinitialiser modèle',
+        undo: () => {
+            model.position.copy(prevModelPos);
+            model.quaternion.copy(prevModelQuat);
+            model.scale.copy(prevModelScale);
+
+            for (const [mesh, t] of meshTransforms) {
+                mesh.position.copy(t.position);
+                mesh.quaternion.copy(t.quaternion);
+                mesh.scale.copy(t.scale);
+                mesh.visible = t.visible;
+            }
+
+            sceneRotator.setAngle(previousRigAngle, xrRig, placedModels);
+            updateRigScale(previousRigScale);
+            editMode.setPerceivedScale(1 / previousRigScale);
+            inspectMode.setExplodeFactor(previousExplodeFactor);
+
+            sceneRotator.refresh(xrRig, placedModels);
+            editMode.selectModel(model);
+        },
+        redo: () => {
+            doResetModel(model);
+            editMode.selectModel(model);
+        },
+    });
 }
 
 /**
