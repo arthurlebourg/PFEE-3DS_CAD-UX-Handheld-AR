@@ -754,7 +754,7 @@ export class UIManager {
 
             .ar-invert-btn {
                 position: absolute;
-                bottom: 30px;
+                bottom: 180px;
                 left: 30px;
                 width: 60px;
                 height: 60px;
@@ -764,6 +764,38 @@ export class UIManager {
                 backdrop-filter: blur(10px);
                 -webkit-backdrop-filter: blur(10px);
                 color: #ffa500;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                box-shadow: 0 8px 32px 0 rgba(255, 140, 0, 0.2);
+                z-index: 1000;
+                opacity: 0;
+                transform: scale(0);
+                pointer-events: none;
+                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                outline: none;
+                padding: 0;
+            }
+
+            .ar-invert-btn.visible {
+                opacity: 1;
+                transform: scale(1);
+                pointer-events: auto;
+            }
+
+            .ar-invert-btn:active {
+                transform: scale(0.9);
+                background: rgba(255, 140, 0, 0.45);
+                box-shadow: 0 0 15px rgba(255, 140, 0, 0.5);
+            }
+
+            .ar-invert-btn svg {
+                width: 24px;
+                height: 24px;
+                stroke: currentColor;
+            }
+
             .ar-history-container {
                 position: absolute;
                 top: max(20px, env(safe-area-inset-top, 20px));
@@ -788,12 +820,6 @@ export class UIManager {
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
-                box-shadow: 0 8px 32px 0 rgba(255, 140, 0, 0.2);
-                z-index: 1000;
-                opacity: 0;
-                transform: scale(0);
-                pointer-events: none;
-                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
                 box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.3);
                 transition: background 0.25s, border-color 0.25s, opacity 0.25s, transform 0.15s, box-shadow 0.25s;
                 pointer-events: auto;
@@ -801,22 +827,6 @@ export class UIManager {
                 padding: 0;
             }
 
-            .ar-invert-btn.visible {
-                opacity: 1;
-                transform: scale(1);
-                pointer-events: auto;
-            }
-
-            .ar-invert-btn:active {
-                transform: scale(0.9);
-                background: rgba(255, 140, 0, 0.45);
-                box-shadow: 0 0 15px rgba(255, 140, 0, 0.5);
-            }
-
-            .ar-invert-btn svg {
-                width: 24px;
-                height: 24px;
-                stroke: currentColor;
             .ar-history-btn svg {
                 width: 20px;
                 height: 20px;
