@@ -143,6 +143,11 @@ export class InspectMode implements InteractionMode {
         this.pinchStartExplode = this.committedExplode;
     }
 
+    /** Inverts piece selection: selects unselected visible meshes, deselects selected ones. */
+    public invertSelection(): void {
+        this.deps.pickHelper.invertSelection();
+    }
+
     public onPinchMove(pinch: PinchState): void {
         this.currentExplode = clamp(
             this.committedExplode + pinch.deltaNormalized,

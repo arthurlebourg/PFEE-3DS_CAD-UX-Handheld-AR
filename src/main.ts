@@ -117,6 +117,7 @@ function init(): void {
             onModelSelect: (modelName) => loadModel(modelName),
             onDelete: () => deleteSelectedModel(),
             onReset: () => resetSelectedModel(),
+            onInvertSelection: () => invertSelection(),
             onUndo: () => historyManager.undo(),
             onRedo: () => historyManager.redo(),
             onPerfToggle: (showPerf) => perf.setVisible(showPerf),
@@ -237,6 +238,11 @@ function init(): void {
     }
 
     window.addEventListener('resize', onWindowResize);
+    window.addEventListener('keydown', (event) => {
+        if (event.key === 'i' || event.key === 'I') {
+            invertSelection();
+        }
+    });
 }
 
 /**
@@ -519,6 +525,14 @@ function doResetModel(model: THREE.Object3D): void {
 }
 
 /**
+ * Inverts the current piece selection in Inspect mode (or globally).
+ */
+function invertSelection(): void {
+    if (modeManager.currentName === 'inspect') {
+        inspectMode.invertSelection();
+    } else {
+        pickHelper.invertSelection();
+    }
  * Resets the model currently selected in Edit mode: reassembles its parts
  * (undoing explode and hidden pieces), restores its
  * original pose and scale, and resets the rig rotation and perceived scale.

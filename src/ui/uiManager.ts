@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, Undo, Redo } from 'lucide';
+import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo } from 'lucide';
 import type { ModeName } from '../modes/interactionMode.js';
 
 export interface UIManagerCallbacks {
@@ -13,6 +13,8 @@ export interface UIManagerCallbacks {
     onDelete: () => void;
     /** Reset the model currently selected in Edit mode. */
     onReset: () => void;
+    /** Invert piece selection in Inspect mode. */
+    onInvertSelection?: () => void;
     /** Undo the last action in the active mode. */
     onUndo: () => void;
     /** Redo the last undone action in the active mode. */
@@ -51,6 +53,8 @@ export class UIManager {
     private btnDelete = document.createElement('button');
     private btnReset = document.createElement('button');
 
+    // Contextual button, shown in Inspect mode
+    private btnInvert = document.createElement('button');
     // History buttons (Undo / Redo)
     private historyContainer = document.createElement('div');
     private btnUndo = document.createElement('button');
@@ -104,6 +108,11 @@ export class UIManager {
         this.btnReset.className = 'ar-reset-btn';
         this.btnReset.innerHTML = `<i data-lucide="rotate-ccw">`;
 
+        // Contextual Invert Selection button (shown in Inspect mode)
+        this.btnInvert.className = 'ar-invert-btn';
+        this.btnInvert.setAttribute('title', 'Inverser la sélection');
+        this.btnInvert.setAttribute('aria-label', 'Inverser la sélection');
+        this.btnInvert.innerHTML = `<i data-lucide="flip-horizontal"></i>`;
         // History buttons (Undo / Redo)
         this.historyContainer.className = 'ar-history-container';
         this.historyContainer.style.display = 'none';
@@ -154,6 +163,7 @@ export class UIManager {
         this.addPointerDownListener(this.btnGear,   () => this.toggleGear());
         this.addPointerDownListener(this.btnDelete, () => this.callbacks.onDelete());
         this.addPointerDownListener(this.btnReset,  () => this.callbacks.onReset());
+        this.addPointerDownListener(this.btnInvert, () => this.callbacks.onInvertSelection?.());
         this.addPointerDownListener(this.btnUndo,   () => {
             if (!this.btnUndo.classList.contains('disabled')) {
                 this.callbacks.onUndo();
@@ -173,6 +183,7 @@ export class UIManager {
         this.modelSelectionPanel.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnDelete.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnReset.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.btnInvert.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.historyContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnUndo.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnRedo.addEventListener('beforexrselect', (e) => e.preventDefault());
@@ -196,6 +207,7 @@ export class UIManager {
         parent.appendChild(this.modelSelectionPanel);
         parent.appendChild(this.btnDelete);
         parent.appendChild(this.btnReset);
+        parent.appendChild(this.btnInvert);
         parent.appendChild(this.historyContainer);
 
         this.hydrateIcons();
@@ -241,8 +253,11 @@ export class UIManager {
             this.modelSelectionPanel.classList.remove('open');
             this.btnDelete.classList.remove('visible');
             this.btnReset.classList.remove('visible');
+            this.btnInvert.classList.remove('visible');
             this.showPickingColors = false;
             this.showPerf = false;
+            this.updateUI();
+        } else {
             this.updateUI();
         }
     }
@@ -253,7 +268,7 @@ export class UIManager {
 
     private hydrateIcons(): void {
         createIcons({
-            icons: { Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, Undo, Redo }
+            icons: { Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo }
         });
     }
 
@@ -348,6 +363,10 @@ export class UIManager {
         this.modelSelectionPanel.querySelectorAll('.ar-model-card').forEach((card) => {
             card.classList.toggle('active', card.getAttribute('data-model') === this.activeModelName);
         });
+
+        // Invert button: visible in inspect mode when UI is active
+        const isSessionActive = this.quickContainer.style.display !== 'none';
+        this.btnInvert.classList.toggle('visible', isSessionActive && this.mode === 'inspect');
     }
 
     // -------------------------------------------------------------------------
@@ -733,6 +752,18 @@ export class UIManager {
                 transform: translateY(-50%) scale(1);
             }
 
+            .ar-invert-btn {
+                position: absolute;
+                bottom: 30px;
+                left: 30px;
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                border: 1px solid rgba(255, 140, 0, 0.4);
+                background: rgba(255, 140, 0, 0.25);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                color: #ffa500;
             .ar-history-container {
                 position: absolute;
                 top: max(20px, env(safe-area-inset-top, 20px));
@@ -757,6 +788,12 @@ export class UIManager {
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
+                box-shadow: 0 8px 32px 0 rgba(255, 140, 0, 0.2);
+                z-index: 1000;
+                opacity: 0;
+                transform: scale(0);
+                pointer-events: none;
+                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
                 box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.3);
                 transition: background 0.25s, border-color 0.25s, opacity 0.25s, transform 0.15s, box-shadow 0.25s;
                 pointer-events: auto;
@@ -764,6 +801,22 @@ export class UIManager {
                 padding: 0;
             }
 
+            .ar-invert-btn.visible {
+                opacity: 1;
+                transform: scale(1);
+                pointer-events: auto;
+            }
+
+            .ar-invert-btn:active {
+                transform: scale(0.9);
+                background: rgba(255, 140, 0, 0.45);
+                box-shadow: 0 0 15px rgba(255, 140, 0, 0.5);
+            }
+
+            .ar-invert-btn svg {
+                width: 24px;
+                height: 24px;
+                stroke: currentColor;
             .ar-history-btn svg {
                 width: 20px;
                 height: 20px;
