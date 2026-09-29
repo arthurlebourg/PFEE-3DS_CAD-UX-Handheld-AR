@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal } from 'lucide';
+import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo } from 'lucide';
 import type { ModeName } from '../modes/interactionMode.js';
 
 export interface UIManagerCallbacks {
@@ -15,6 +15,10 @@ export interface UIManagerCallbacks {
     onReset: () => void;
     /** Invert piece selection in Inspect mode. */
     onInvertSelection?: () => void;
+    /** Undo the last action in the active mode. */
+    onUndo: () => void;
+    /** Redo the last undone action in the active mode. */
+    onRedo: () => void;
     /** Dev only: toggle the picking-colours debug view. */
     onDebugToggle?: (showColors: boolean) => void;
     /** Dev only: toggle the perf stats overlay. */
@@ -51,6 +55,10 @@ export class UIManager {
 
     // Contextual button, shown in Inspect mode
     private btnInvert = document.createElement('button');
+    // History buttons (Undo / Redo)
+    private historyContainer = document.createElement('div');
+    private btnUndo = document.createElement('button');
+    private btnRedo = document.createElement('button');
 
     // Dev-only gear radial menu
     private container = document.createElement('div');
@@ -105,6 +113,21 @@ export class UIManager {
         this.btnInvert.setAttribute('title', 'Inverser la sélection');
         this.btnInvert.setAttribute('aria-label', 'Inverser la sélection');
         this.btnInvert.innerHTML = `<i data-lucide="flip-horizontal"></i>`;
+        // History buttons (Undo / Redo)
+        this.historyContainer.className = 'ar-history-container';
+        this.historyContainer.style.display = 'none';
+
+        this.btnUndo.className = 'ar-history-btn btn-undo disabled';
+        this.btnUndo.innerHTML = `<i data-lucide="undo"></i>`;
+        this.btnUndo.title = 'Annuler (Undo)';
+        this.btnUndo.setAttribute('aria-label', 'Annuler');
+
+        this.btnRedo.className = 'ar-history-btn btn-redo disabled';
+        this.btnRedo.innerHTML = `<i data-lucide="redo"></i>`;
+        this.btnRedo.title = 'Rétablir (Redo)';
+        this.btnRedo.setAttribute('aria-label', 'Rétablir');
+
+        this.historyContainer.append(this.btnUndo, this.btnRedo);
 
         // Dev-only gear radial menu (debug buttons)
         this.container.className = 'ar-menu-container';
@@ -135,12 +158,22 @@ export class UIManager {
         }
 
         // Wire up events
-        this.addPointerDownListener(this.btnMode,  () => this.callbacks.onModeToggle());
-        this.addPointerDownListener(this.btnModel, () => this.toggleModelPanel());
-        this.addPointerDownListener(this.btnGear,  () => this.toggleGear());
+        this.addPointerDownListener(this.btnMode,   () => this.callbacks.onModeToggle());
+        this.addPointerDownListener(this.btnModel,  () => this.toggleModelPanel());
+        this.addPointerDownListener(this.btnGear,   () => this.toggleGear());
         this.addPointerDownListener(this.btnDelete, () => this.callbacks.onDelete());
         this.addPointerDownListener(this.btnReset,  () => this.callbacks.onReset());
         this.addPointerDownListener(this.btnInvert, () => this.callbacks.onInvertSelection?.());
+        this.addPointerDownListener(this.btnUndo,   () => {
+            if (!this.btnUndo.classList.contains('disabled')) {
+                this.callbacks.onUndo();
+            }
+        });
+        this.addPointerDownListener(this.btnRedo,   () => {
+            if (!this.btnRedo.classList.contains('disabled')) {
+                this.callbacks.onRedo();
+            }
+        });
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
@@ -151,6 +184,9 @@ export class UIManager {
         this.btnDelete.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnReset.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnInvert.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.historyContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.btnUndo.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.btnRedo.addEventListener('beforexrselect', (e) => e.preventDefault());
 
         this.updateUI();
 
@@ -172,6 +208,7 @@ export class UIManager {
         parent.appendChild(this.btnDelete);
         parent.appendChild(this.btnReset);
         parent.appendChild(this.btnInvert);
+        parent.appendChild(this.historyContainer);
 
         this.hydrateIcons();
     }
@@ -197,8 +234,15 @@ export class UIManager {
         this.btnReset.classList.toggle('visible', visible);
     }
 
+    /** Updates the enabled state of the Undo and Redo buttons. */
+    public updateHistoryState(canUndo: boolean, canRedo: boolean): void {
+        this.btnUndo.classList.toggle('disabled', !canUndo);
+        this.btnRedo.classList.toggle('disabled', !canRedo);
+    }
+
     public toggleVisibility(show: boolean): void {
         this.quickContainer.style.display = show ? 'flex' : 'none';
+        this.historyContainer.style.display = show ? 'flex' : 'none';
         if (this.isDevMode) {
             this.container.style.display = show ? 'block' : 'none';
         }
@@ -224,7 +268,7 @@ export class UIManager {
 
     private hydrateIcons(): void {
         createIcons({
-            icons: { Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal }
+            icons: { Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo }
         });
     }
 
@@ -720,6 +764,26 @@ export class UIManager {
                 backdrop-filter: blur(10px);
                 -webkit-backdrop-filter: blur(10px);
                 color: #ffa500;
+            .ar-history-container {
+                position: absolute;
+                top: max(20px, env(safe-area-inset-top, 20px));
+                right: max(20px, env(safe-area-inset-right, 20px));
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                z-index: 1000;
+                pointer-events: auto;
+            }
+
+            .ar-history-btn {
+                width: 42px;
+                height: 42px;
+                border-radius: 50%;
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                background: rgba(20, 20, 25, 0.75);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                color: #fff;
                 display: flex;
                 align-items: center;
                 justify-content: center;
@@ -730,6 +794,9 @@ export class UIManager {
                 transform: scale(0);
                 pointer-events: none;
                 transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.3);
+                transition: background 0.25s, border-color 0.25s, opacity 0.25s, transform 0.15s, box-shadow 0.25s;
+                pointer-events: auto;
                 outline: none;
                 padding: 0;
             }
@@ -750,6 +817,29 @@ export class UIManager {
                 width: 24px;
                 height: 24px;
                 stroke: currentColor;
+            .ar-history-btn svg {
+                width: 20px;
+                height: 20px;
+                stroke: currentColor;
+                transition: transform 0.2s;
+            }
+
+            .ar-history-btn:not(.disabled):hover {
+                background: rgba(40, 40, 55, 0.85);
+                border-color: rgba(255, 255, 255, 0.4);
+                box-shadow: 0 0 12px rgba(255, 255, 255, 0.2);
+            }
+
+            .ar-history-btn:not(.disabled):active {
+                transform: scale(0.9);
+            }
+
+            .ar-history-btn.disabled {
+                opacity: 0.3;
+                cursor: default;
+                pointer-events: none;
+                box-shadow: none;
+                border-color: rgba(255, 255, 255, 0.1);
             }
         `;
         document.head.appendChild(style);
