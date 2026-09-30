@@ -13,6 +13,7 @@ import { GestureRecognizer } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
 import { EditMode } from './modes/editMode.js';
 import { InspectMode } from './modes/inspectMode.js';
+import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
 import { ModeHistoryManager } from './history/historyManager.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
@@ -59,6 +60,7 @@ let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let editMode: EditMode;
 let inspectMode: InspectMode;
+let spatialMappingOverlay: SpatialMappingOverlay;
 let historyManager: ModeHistoryManager;
 let rotateStartAngle = 0;
 
@@ -141,9 +143,22 @@ function init(): void {
     });
     joystick.attach(document.body);
 
+    spatialMappingOverlay = new SpatialMappingOverlay(() => {
+        if (!isDevMode) {
+            modeManager.setMode('edit');
+            editMode.arm();
+        } else if (devModel) {
+            devModel.visible = true;
+        }
+    }, isDevMode);
+    spatialMappingOverlay.attach(document.body);
+
     editMode = new EditMode({
         joystick,
         placeModel: () => {
+            if (!spatialMappingOverlay.isComplete) {
+                return false;
+            }
             if (previewModel?.visible && loadedModel) {
                 placeModel();
                 return true;
@@ -212,7 +227,7 @@ function init(): void {
     gestureRecognizer.attach(document.body);
 
     if (isDevMode) {
-        devTick = setupDevMode(scene, camera, renderer, uiManager);
+        devTick = setupDevMode(scene, camera, renderer, uiManager, spatialMappingOverlay);
         // No AR hit-testing in dev mode, so placement is useless: inspecting
         // (picking, explode) is the relevant default.
         modeManager.setMode('inspect');
@@ -226,10 +241,12 @@ function init(): void {
 
         renderer.xr.addEventListener('sessionstart', () => {
             uiManager.toggleVisibility(true);
+            spatialMappingOverlay.start();
         });
         renderer.xr.addEventListener('sessionend', () => {
             uiManager.toggleVisibility(false);
             perf.setVisible(false);
+            spatialMappingOverlay.hide();
         });
     }
 
@@ -290,6 +307,7 @@ function loadModel(modelName: string): void {
             devModel = loadedModel.clone();
             devModel.applyMatrix4(currentScaleMatrix);
             devModel.position.set(0, 1.5, -2);
+            devModel.visible = spatialMappingOverlay ? spatialMappingOverlay.isComplete : true;
 
             // Save original transforms for the Reset action
             devModel.userData.originalPosition = devModel.position.clone();
@@ -300,9 +318,11 @@ function loadModel(modelName: string): void {
             pickHelper.registerModel(devModel);
         } else {
             // Selecting a model in the carousel arms placement: the next tap
-            // in Edit mode will place it.
-            modeManager.setMode('edit');
-            editMode.arm();
+            // in Edit mode will place it once mapping is complete.
+            if (spatialMappingOverlay.isComplete) {
+                modeManager.setMode('edit');
+                editMode.arm();
+            }
         }
     });
 }
@@ -312,7 +332,7 @@ function loadModel(modelName: string): void {
  * this is a genuine tap (or double tap) and dispatches it to the active mode.
  */
 function onSelect(inputSource?: XRInputSource): void {
-    if (!renderer.xr.isPresenting) return;
+    if (!renderer.xr.isPresenting || !spatialMappingOverlay.isComplete) return;
 
     gestureRecognizer.handleXRSelect(inputSource);
 }
@@ -709,6 +729,10 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
     devTick?.();
 
+    if (isDevMode && spatialMappingOverlay) {
+        spatialMappingOverlay.updateDev(camera);
+    }
+
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
@@ -726,12 +750,14 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             hitTestSourceRequested = true;
         }
 
-        if (hitTestSource && referenceSpace && previewModel) {
+        let hasSurface = false;
+        if (hitTestSource && referenceSpace) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
+            hasSurface = hitTestResults.length > 0;
 
             const placementArmed =
                 modeManager.currentName === 'edit' && editMode.isArmed;
-            if (hitTestResults.length > 0 && placementArmed) {
+            if (hasSurface && placementArmed && spatialMappingOverlay.isComplete && previewModel) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
@@ -758,9 +784,13 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                     currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
                     previewModel.scale.copy(modelScale);
                 }
-            } else {
+            } else if (previewModel) {
                 previewModel.visible = false;
             }
+        }
+
+        if (referenceSpace && spatialMappingOverlay) {
+            spatialMappingOverlay.updateWebXR(frame, referenceSpace, hasSurface);
         }
     }
     if (uiManager.showPickingColors) {
