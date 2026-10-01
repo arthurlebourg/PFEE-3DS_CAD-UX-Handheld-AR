@@ -9,6 +9,7 @@ import { PerfProbe } from './ui/perf.js';
 import { JoystickWidget } from './ui/joystickWidget.js';
 import { PickHelper } from './scene/picking.js';
 import { SceneRotator } from './scene/sceneRotator.js';
+import { ShadowSystem } from './scene/shadowSystem.js';
 import { GestureRecognizer } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
 import { EditMode } from './modes/editMode.js';
@@ -61,6 +62,7 @@ let pickHelper: PickHelper;
 let hierarchySlider: HierarchySlider;
 let perf: PerfProbe;
 let occlusion: Occlusion;
+let shadowSystem: ShadowSystem;
 
 let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
@@ -108,6 +110,8 @@ function init(): void {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
+
+    shadowSystem = new ShadowSystem(scene, renderer);
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -368,6 +372,7 @@ function loadModel(modelName: string): void {
             // No AR hit-testing in dev mode: drop the model on the orbit target
             // so it is immediately visible and pickable.
             if (devModel) {
+                shadowSystem.unregisterModel(devModel);
                 scene.remove(devModel);
                 pickHelper.removeModel(devModel);
             }
@@ -383,6 +388,13 @@ function loadModel(modelName: string): void {
 
             scene.add(devModel);
             pickHelper.registerModel(devModel);
+
+            // Desktop dev mode has no WebXR hit-test. Use the horizontal grid
+            // at y = 0 as the physical support surface so shadows are testable.
+            shadowSystem.registerModel(devModel, {
+                position: new THREE.Vector3(devModel.position.x, 0, devModel.position.z),
+                quaternion: new THREE.Quaternion(),
+            });
         } else {
             // Selecting a model in the carousel arms placement: the next tap
             // in Edit mode will place it once mapping is complete.
@@ -420,6 +432,10 @@ function updateRigScale(newScale: number): void {
         const { physicalPosition } = model.userData as PhysicalPose;
         if (physicalPosition) {
             model.position.copy(physicalPosition).multiplyScalar(rigScale);
+            shadowSystem.updateSurface(model, {
+                position: model.position,
+                quaternion: model.quaternion,
+            });
         }
     }
 
@@ -463,6 +479,14 @@ function placeModel(): void {
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
+
+    // The model root already carries the hit-test pose, so the invisible
+    // receiver is aligned with the exact real surface used for placement.
+    shadowSystem.registerModel(model, {
+        position: model.position,
+        quaternion: model.quaternion,
+    });
+
     sceneRotator.refresh(xrRig, placedModels);
 
     historyManager.push('edit', {
@@ -518,6 +542,7 @@ function deleteSelectedModel(): void {
     pickHelper.clearSelection();
 
     pickHelper.removeModel(model);
+    shadowSystem.unregisterModel(model);
     scene.remove(model);
 
     if (index !== -1) {
@@ -610,6 +635,18 @@ function doResetModel(model: THREE.Object3D): void {
     }
     if (model.userData.originalModelScale) {
         model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
+    }
+
+    if (model === devModel) {
+        shadowSystem.updateSurface(model, {
+            position: new THREE.Vector3(model.position.x, 0, model.position.z),
+            quaternion: new THREE.Quaternion(),
+        });
+    } else {
+        shadowSystem.updateSurface(model, {
+            position: model.position,
+            quaternion: model.quaternion,
+        });
     }
 
     sceneRotator.refresh(xrRig, placedModels);
