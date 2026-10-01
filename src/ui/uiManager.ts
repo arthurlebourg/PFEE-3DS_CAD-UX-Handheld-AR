@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo } from 'lucide';
+import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark } from 'lucide';
 import type { ModeName } from '../modes/interactionMode.js';
 
 export interface UIManagerCallbacks {
@@ -23,7 +23,15 @@ export interface UIManagerCallbacks {
     onDebugToggle?: (showColors: boolean) => void;
     /** Dev only: toggle the perf stats overlay. */
     onPerfToggle?: (showPerf: boolean) => void;
+    /** Opens the gesture cheat sheet. */
+    onHelp?: () => void;
 }
+
+/**
+ * UI landmarks the tutorial can ring with its spotlight. Declared here because
+ * this class owns the buttons; the tutorial only asks where they are.
+ */
+export type UITarget = 'mode' | 'models' | 'model-actions' | 'help';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
@@ -47,6 +55,7 @@ export class UIManager {
     private btnMode = document.createElement('button');
     private modeCaption = document.createElement('span');
     private btnModel = document.createElement('button');
+    private btnHelp = document.createElement('button');
     private modelSelectionPanel = document.createElement('div');
 
     // Contextual buttons, shown while a placed model is selected in Edit mode
@@ -101,6 +110,12 @@ export class UIManager {
         modelItem.append(this.btnModel, modelCaption);
 
         this.quickContainer.append(modeItem, modelItem);
+
+        // Help sits top-left, away from the quick column: a third item there
+        // would push the column past the top of a phone held in landscape.
+        this.btnHelp.className = 'ar-help-btn';
+        this.btnHelp.innerHTML = `<i data-lucide="circle-question-mark"></i>`;
+        this.btnHelp.setAttribute('aria-label', 'Aide : gestes');
 
         // Contextual Delete/Reset buttons (hidden until a model is selected)
         this.btnDelete.className = 'ar-delete-btn';
@@ -174,6 +189,7 @@ export class UIManager {
                 this.callbacks.onRedo();
             }
         });
+        this.addPointerDownListener(this.btnHelp,   () => this.callbacks.onHelp?.());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
@@ -187,6 +203,7 @@ export class UIManager {
         this.historyContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnUndo.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnRedo.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.btnHelp.addEventListener('beforexrselect', (e) => e.preventDefault());
 
         this.updateUI();
 
@@ -209,6 +226,7 @@ export class UIManager {
         parent.appendChild(this.btnReset);
         parent.appendChild(this.btnInvert);
         parent.appendChild(this.historyContainer);
+        parent.appendChild(this.btnHelp);
 
         this.hydrateIcons();
     }
@@ -233,6 +251,34 @@ export class UIManager {
         this.btnReset.classList.toggle('visible', visible);
     }
 
+    /**
+     * Bounding box of a UI landmark, for the tutorial's spotlight ring.
+     * A hidden contextual button is scaled to 0 and reports an empty rect,
+     * which the overlay reads as "nothing to point at".
+     */
+    public getSpotlightRect(target: UITarget): DOMRect | null {
+        switch (target) {
+            case 'mode':
+                return this.btnMode.getBoundingClientRect();
+            case 'models':
+                return this.btnModel.getBoundingClientRect();
+            case 'help':
+                return this.btnHelp.getBoundingClientRect();
+            case 'model-actions': {
+                const remove = this.btnDelete.getBoundingClientRect();
+                const reset = this.btnReset.getBoundingClientRect();
+                const left = Math.min(remove.left, reset.left);
+                const top = Math.min(remove.top, reset.top);
+                return new DOMRect(
+                    left,
+                    top,
+                    Math.max(remove.right, reset.right) - left,
+                    Math.max(remove.bottom, reset.bottom) - top,
+                );
+            }
+        }
+    }
+
     /** Updates the enabled state of the Undo and Redo buttons. */
     public updateHistoryState(canUndo: boolean, canRedo: boolean): void {
         this.btnUndo.classList.toggle('disabled', !canUndo);
@@ -242,6 +288,7 @@ export class UIManager {
     public toggleVisibility(show: boolean): void {
         this.quickContainer.style.display = show ? 'flex' : 'none';
         this.historyContainer.style.display = show ? 'flex' : 'none';
+        this.btnHelp.classList.toggle('visible', show);
         if (this.isDevMode) {
             this.container.style.display = show ? 'block' : 'none';
         }
@@ -267,7 +314,10 @@ export class UIManager {
 
     private hydrateIcons(): void {
         createIcons({
-            icons: { Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo }
+            icons: {
+                Settings, Layers, Eye, Activity, Pencil,
+                Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark,
+            }
         });
     }
 
@@ -458,6 +508,32 @@ export class UIManager {
                 white-space: nowrap;
                 pointer-events: none;
             }
+
+            .ar-help-btn {
+                position: absolute;
+                top: 20px;
+                left: 20px;
+                width: 44px;
+                height: 44px;
+                border-radius: 50%;
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                background: rgba(20, 20, 25, 0.75);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                color: rgba(255, 255, 255, 0.85);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+                z-index: 1000;
+                outline: none;
+                padding: 0;
+            }
+
+            .ar-help-btn.visible { display: flex; }
+            .ar-help-btn:active { transform: scale(0.92); }
+            .ar-help-btn svg { width: 22px; height: 22px; }
 
             .ar-menu-container {
                 position: absolute;

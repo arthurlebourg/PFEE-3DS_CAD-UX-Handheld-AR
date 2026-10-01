@@ -122,7 +122,7 @@ export class PerfProbe {
         const hud = document.createElement('div');
         hud.style.cssText = [
             'position:absolute',
-            'top:12px',
+            'top:76px',
             'left:12px',
             'z-index:200',
             'padding:8px 10px',

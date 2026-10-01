@@ -15,6 +15,8 @@ import { EditMode } from './modes/editMode.js';
 import { InspectMode } from './modes/inspectMode.js';
 import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
 import { ModeHistoryManager } from './history/historyManager.js';
+import { TutorialEventBus } from './tutorial/tutorialEvents.js';
+import { TutorialManager } from './tutorial/tutorialManager.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -58,6 +60,14 @@ let perf: PerfProbe;
 
 let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
+let tutorial: TutorialManager;
+
+/**
+ * The tutorial observes the app through this bus. Emitting is the app's only
+ * concession to it: modes keep owning every gesture, so a tutorial step is
+ * validated by the effect the user actually saw in the scene.
+ */
+const tutorialEvents = new TutorialEventBus();
 let editMode: EditMode;
 let inspectMode: InspectMode;
 let spatialMappingOverlay: SpatialMappingOverlay;
@@ -123,6 +133,7 @@ function init(): void {
             onUndo: () => historyManager.undo(),
             onRedo: () => historyManager.redo(),
             onPerfToggle: (showPerf) => perf.setVisible(showPerf),
+            onHelp: () => tutorial.toggleCheatSheet(),
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
@@ -134,21 +145,34 @@ function init(): void {
 
     const joystick = new JoystickWidget((strength) => {
         const maxSpeed = 0.06;
+        const deltaRad = strength * maxSpeed;
 
-        sceneRotator.rotateAroundCenter(
-            xrRig,
-            placedModels,
-            strength * maxSpeed,
-        );
+        sceneRotator.rotateAroundCenter(xrRig, placedModels, deltaRad);
+
+        // With nothing placed the rotation is a no-op, so it must not count
+        // towards the tutorial's rotation step either.
+        if (placedModels.length > 0) {
+            tutorialEvents.emit({ kind: 'scene-rotated', deltaRad });
+        }
     });
     joystick.attach(document.body);
 
+    // The tour waits for mapping: its first step places a model, which needs a
+    // surface, and its cards would otherwise stack under the scan overlay.
     spatialMappingOverlay = new SpatialMappingOverlay(() => {
         if (!isDevMode) {
             modeManager.setMode('edit');
             editMode.arm();
-        } else if (devModel) {
-            devModel.visible = true;
+            tutorial.offerOnFirstRun();
+        } else {
+            if (devModel) {
+                devModel.visible = true;
+            }
+            // ?tutorial=1 iterates on the overlay without a headset. The AR-only
+            // placement step is filtered out, since dev mode has no hit-testing.
+            if (new URLSearchParams(window.location.search).get('tutorial') === '1') {
+                tutorial.replay();
+            }
         }
     }, isDevMode);
     spatialMappingOverlay.attach(document.body);
@@ -161,12 +185,14 @@ function init(): void {
             }
             if (previewModel?.visible && loadedModel) {
                 placeModel();
+                tutorialEvents.emit({ kind: 'model-placed' });
                 return true;
             }
             return false;
         },
         onRigScale: (scale) => {
             updateRigScale(scale);
+            tutorialEvents.emit({ kind: 'scale-changed', perceived: 1 / scale });
         },
         pickModel: (inputSource) => {
             const mesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
@@ -180,6 +206,7 @@ function init(): void {
         },
         onSelectionChange: (model) => {
             uiManager.setModelActionsVisible(model !== null);
+            tutorialEvents.emit({ kind: 'model-selected', selected: model !== null });
         },
         onAction: (action) => {
             historyManager.push('edit', action);
@@ -209,6 +236,13 @@ function init(): void {
         pickMesh: (inputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf),
         onExplode: (factor) => {
             explode(factor);
+            tutorialEvents.emit({ kind: 'explode-changed', factor });
+        },
+        onPartPicked: () => {
+            tutorialEvents.emit({ kind: 'part-picked' });
+        },
+        onPartHidden: () => {
+            tutorialEvents.emit({ kind: 'part-hidden' });
         },
         onAction: (action) => {
             historyManager.push('inspect', action);
@@ -221,10 +255,24 @@ function init(): void {
         if (mode === 'inspect' && previewModel) {
             previewModel.visible = false;
         }
+        tutorialEvents.emit({ kind: 'mode-changed', mode });
     });
 
-    gestureRecognizer = new GestureRecognizer(modeManager);
+    gestureRecognizer = new GestureRecognizer(modeManager, (gesture) => {
+        tutorialEvents.emit({ kind: 'gesture', gesture });
+    });
     gestureRecognizer.attach(document.body);
+
+    tutorial = new TutorialManager({
+        events: tutorialEvents,
+        spotlightRect: (target) => uiManager.getSpotlightRect(target),
+        currentMode: () => modeManager.currentName,
+        resetScene: () => {
+            resetSceneState();
+        },
+        isDevMode,
+    });
+    tutorial.attach(document.body);
 
     if (isDevMode) {
         devTick = setupDevMode(scene, camera, renderer, uiManager, spatialMappingOverlay);
@@ -246,6 +294,7 @@ function init(): void {
         renderer.xr.addEventListener('sessionend', () => {
             uiManager.toggleVisibility(false);
             perf.setVisible(false);
+            tutorial.stop();
             spatialMappingOverlay.hide();
         });
     }
@@ -542,6 +591,29 @@ function doResetModel(model: THREE.Object3D): void {
     }
 
     sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Undoes what a tutorial run leaves behind: hidden pieces, an exploded view,
+ * a rotated rig and a changed perceived scale.
+ *
+ * Unlike the Réinitialiser button this needs no selection — the tour never
+ * requires one — and it leaves each model's own pose alone.
+ */
+function resetSceneState(): void {
+    inspectMode.showAllHidden();
+    inspectMode.resetExplodeState();
+    explode(0);
+
+    sceneRotator.reset(xrRig);
+    updateRigScale(1.0);
+    editMode.resetScaleState();
+    editMode.clearSelection();
+    pickHelper.clearSelection();
+
+    // The tour's actions were recorded as it went; undoing them now would
+    // replay state this reset just wiped.
+    historyManager.clearAll();
 }
 
 /**

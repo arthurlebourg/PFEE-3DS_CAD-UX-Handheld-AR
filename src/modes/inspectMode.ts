@@ -12,6 +12,10 @@ interface InspectModeDeps {
     onExplode(factor: number): void;
     /** Pushes an undoable action to the inspect history stack. */
     onAction?: (action: HistoryAction) => void;
+    /** Observation hook: a piece was picked (drives the tutorial). */
+    onPartPicked?(): void;
+    /** Observation hook: a piece was hidden (drives the tutorial). */
+    onPartHidden?(): void;
 }
 
 /** Parts never fly further than this explosion factor. */
@@ -63,6 +67,7 @@ export class InspectMode implements InteractionMode {
 
         if (pickedMesh) {
             pickHelper.handleMeshSelection(pickedMesh);
+            this.deps.onPartPicked?.();
         } else if (pickHelper.selectedMeshes.length > 0) {
             pickHelper.clearSelection();
         }
@@ -78,6 +83,7 @@ export class InspectMode implements InteractionMode {
 
         mesh.visible = false;
         this.hiddenMeshes.push(mesh);
+        this.deps.onPartHidden?.();
 
         this.deps.onAction?.({
             description: 'Masquer pièce',

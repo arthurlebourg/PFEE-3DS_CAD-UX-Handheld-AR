@@ -142,6 +142,12 @@ export class ModeHistoryManager {
         return this.stacks[this.activeMode].redo();
     }
 
+    /** Clears the undo and redo stacks of every mode. */
+    public clearAll(): void {
+        this.stacks.edit.clear();
+        this.stacks.inspect.clear();
+    }
+
     public notifyActiveState(): void {
         const stack = this.stacks[this.activeMode];
         this.onStateChange(stack.canUndo, stack.canRedo);
