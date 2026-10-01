@@ -10,6 +10,7 @@ const PINCH_SPREAD_FRACTION = 0.6;
 /** Touches starting on interactive UI never become scene gestures. */
 const UI_SELECTOR =
     '.ar-menu-container, .ar-model-panel, .ar-quick-container, .ar-delete-btn, .ar-reset-btn, ' +
+    '.ar-scan-overlay, .ar-scan-toast, .ar-scan-card, .ar-invert-btn, .ar-history-container, .ar-history-btn, ' +
     '.ar-help-btn, .ar-tutorial-card, .ar-tutorial-modal, .ar-cheatsheet';
 
 /**

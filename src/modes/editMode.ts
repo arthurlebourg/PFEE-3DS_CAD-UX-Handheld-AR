@@ -2,6 +2,7 @@ import type { Object3D } from 'three';
 import type { InteractionMode, PinchState } from './interactionMode.js';
 import { clamp } from './interactionMode.js';
 import type { JoystickWidget } from '../ui/joystickWidget.js';
+import type { HistoryAction } from '../history/historyManager.js';
 
 interface EditModeDeps {
     joystick: JoystickWidget;
@@ -15,6 +16,12 @@ interface EditModeDeps {
     unhighlightModel(model: Object3D): void;
     /** Fired when the selected model changes (drives the Delete/Reset buttons). */
     onSelectionChange(model: Object3D | null): void;
+    /** Pushes an undoable action to the edit history stack. */
+    onAction?: (action: HistoryAction) => void;
+    /** Called when scene rotation via joystick begins. */
+    onRotateStart?: () => void;
+    /** Called when scene rotation via joystick ends. */
+    onRotateEnd?: () => void;
 }
 
 /** Perceived-scale bounds, matching the old slider's 10%–1000% range. */
@@ -42,9 +49,24 @@ export class EditMode implements InteractionMode {
     private selected: Object3D | null = null;
     private committedPerceivedScale = 1;
     private currentPerceivedScale = 1;
+    private pinchStartPerceivedScale = 1;
 
     constructor(deps: EditModeDeps) {
         this.deps = deps;
+    }
+
+    public getPerceivedScale(): number {
+        return this.committedPerceivedScale;
+    }
+
+    public setPerceivedScale(scale: number): void {
+        this.committedPerceivedScale = clamp(scale, MIN_PERCEIVED_SCALE, MAX_PERCEIVED_SCALE);
+        this.currentPerceivedScale = this.committedPerceivedScale;
+        this.deps.onRigScale(1 / this.committedPerceivedScale);
+    }
+
+    public selectModel(model: Object3D | null): void {
+        this.select(model);
     }
 
     /** True while a carousel-selected model is waiting to be placed. */
@@ -99,6 +121,7 @@ export class EditMode implements InteractionMode {
     }
 
     public onHoldStart(x: number, y: number): void {
+        this.deps.onRotateStart?.();
         this.deps.joystick.show(x, y);
     }
 
@@ -108,6 +131,11 @@ export class EditMode implements InteractionMode {
 
     public onHoldEnd(): void {
         this.deps.joystick.hide();
+        this.deps.onRotateEnd?.();
+    }
+
+    public onPinchStart(): void {
+        this.pinchStartPerceivedScale = this.committedPerceivedScale;
     }
 
     public onPinchMove(pinch: PinchState): void {
@@ -120,7 +148,21 @@ export class EditMode implements InteractionMode {
     }
 
     public onPinchEnd(): void {
+        const start = this.pinchStartPerceivedScale;
+        const end = this.currentPerceivedScale;
         this.committedPerceivedScale = this.currentPerceivedScale;
+
+        if (Math.abs(end - start) > 0.01) {
+            this.deps.onAction?.({
+                description: 'Échelle perçue',
+                undo: () => {
+                    this.setPerceivedScale(start);
+                },
+                redo: () => {
+                    this.setPerceivedScale(end);
+                },
+            });
+        }
     }
 
     private select(model: Object3D | null): void {
