@@ -1,8 +1,31 @@
 import type { Camera } from 'three';
 
+/** Share of the bar camera motion alone can fill; the rest requires a real surface. */
+const MOTION_CAP = 0.6;
+/** Progress per frame of camera motion, before any surface is seen (~2 s to the cap at 30 fps). */
+const MOTION_STEP = 0.01;
+/** Per-frame displacement (m) that counts as the user moving the device. */
+const MOTION_THRESHOLD = 0.002;
+/** Surface score needed to validate placement (~0.7 s of steady hits at 30 fps). */
+const SURFACE_TARGET = 20;
+/** A missed hit costs less than a hit earns, so brief flicker doesn't reset the score. */
+const SURFACE_DECAY = 0.5;
+/** Time without a surface in view before suggesting where to aim. */
+const HINT_DELAY_MS = 7000;
+/** Fraction of the gap the displayed bar closes each frame, so jumps animate. */
+const BAR_SMOOTHING = 0.25;
+
+const MSG_MOVE = 'Déplacez lentement la caméra pour cartographier la pièce';
+const MSG_STABILIZING = 'Surface détectée, stabilisation...';
+const MSG_HINT = 'Pointez vers le sol ou une table bien éclairée';
+const MSG_DONE = 'Espace cartographié !';
+
 /**
- * SpatialMappingOverlay: Lightweight onboarding overlay with scan animation and progress bar.
- * Prompts the user to move their phone to map the space before placing the 3D model.
+ * SpatialMappingOverlay: onboarding overlay shown until a placement surface is found.
+ *
+ * Camera motion fills the bar up to MOTION_CAP to reassure the user while tracking
+ * warms up; the remainder only fills while the centre-screen hit test keeps finding
+ * a surface, so completion guarantees there is somewhere to place a model.
  */
 export class SpatialMappingOverlay {
     public isComplete = false;
@@ -11,7 +34,10 @@ export class SpatialMappingOverlay {
     private barFill!: HTMLElement;
     private subtitle!: HTMLElement;
     private percentLabel!: HTMLElement;
-    private progress = 0;
+    private motionProgress = 0;
+    private surfaceScore = 0;
+    private displayedProgress = 0;
+    private lastSurfaceTime = 0;
     private lastPos?: { x: number; y: number; z: number };
     private onComplete?: () => void;
 
@@ -27,9 +53,12 @@ export class SpatialMappingOverlay {
 
     public start(): void {
         this.isComplete = false;
-        this.progress = 0;
+        this.motionProgress = 0;
+        this.surfaceScore = 0;
+        this.displayedProgress = 0;
+        this.lastSurfaceTime = performance.now();
         this.lastPos = undefined;
-        this.updateUI(0, 'Déplacez lentement la caméra pour cartographier la pièce');
+        this.updateUI(0, MSG_MOVE);
         this.barFill.classList.remove('complete');
         this.root.classList.remove('fade-out');
         this.root.style.display = 'flex';
@@ -39,50 +68,71 @@ export class SpatialMappingOverlay {
         this.root.style.display = 'none';
     }
 
-    /** Increments mapping progress. */
-    public step(delta = 0.012): void {
-        if (this.isComplete) return;
-
-        this.progress = Math.min(1, this.progress + delta);
-        const sub = this.progress > 0.65
-            ? 'Surface détectée, stabilisation...'
-            : 'Déplacez lentement la caméra pour cartographier la pièce';
-        this.updateUI(this.progress, sub);
-
-        if (this.progress >= 1) {
-            this.isComplete = true;
-            this.barFill.classList.add('complete');
-            this.updateUI(1, 'Espace cartographié !');
-            this.onComplete?.();
-
-            setTimeout(() => {
-                this.root.classList.add('fade-out');
-                setTimeout(() => this.hide(), 400);
-            }, 700);
-        }
-    }
-
-    /** Tracks camera movement in WebXR sessions. */
+    /** Feeds one WebXR frame: viewer motion plus whether the hit test found a surface. */
     public updateWebXR(frame: XRFrame, refSpace: XRReferenceSpace, hasSurface: boolean): void {
         const pose = frame.getViewerPose(refSpace);
-        if (pose) {
-            this.trackMotion(pose.transform.position, hasSurface ? 0.016 : 0.010);
-        } else if (hasSurface) {
-            this.step(0.012);
-        }
+        this.update(pose ? this.hasMoved(pose.transform.position) : false, hasSurface);
     }
 
-    /** Tracks camera movement in Dev Mode via OrbitControls. */
+    /**
+     * Feeds one Dev Mode frame. There is no hit testing on desktop, so orbiting
+     * the camera stands in for seeing a surface.
+     */
     public updateDev(camera: Camera): void {
-        this.trackMotion(camera.position, 0.02);
+        const moved = this.hasMoved(camera.position);
+        this.update(moved, moved);
     }
 
-    private trackMotion(pos: { x: number; y: number; z: number }, amount: number): void {
+    private update(moved: boolean, hasSurface: boolean): void {
         if (this.isComplete) return;
-        if (this.lastPos && Math.hypot(pos.x - this.lastPos.x, pos.y - this.lastPos.y, pos.z - this.lastPos.z) > 0.002) {
-            this.step(amount);
+
+        if (hasSurface) {
+            // A surface implies tracking is up: skip the rest of the motion phase.
+            this.motionProgress = MOTION_CAP;
+            this.surfaceScore = Math.min(SURFACE_TARGET, this.surfaceScore + 1);
+            this.lastSurfaceTime = performance.now();
+        } else {
+            if (moved) {
+                this.motionProgress = Math.min(MOTION_CAP, this.motionProgress + MOTION_STEP);
+            }
+            this.surfaceScore = Math.max(0, this.surfaceScore - SURFACE_DECAY);
         }
+
+        if (this.surfaceScore >= SURFACE_TARGET) {
+            this.complete();
+            return;
+        }
+
+        const target = this.motionProgress + (1 - MOTION_CAP) * (this.surfaceScore / SURFACE_TARGET);
+        this.displayedProgress += (target - this.displayedProgress) * BAR_SMOOTHING;
+
+        let msg = MSG_MOVE;
+        if (this.surfaceScore > 0) {
+            msg = MSG_STABILIZING;
+        } else if (performance.now() - this.lastSurfaceTime > HINT_DELAY_MS) {
+            msg = MSG_HINT;
+        }
+        this.updateUI(this.displayedProgress, msg);
+    }
+
+    private complete(): void {
+        if (this.isComplete) return;
+        this.isComplete = true;
+        this.barFill.classList.add('complete');
+        this.updateUI(1, MSG_DONE);
+        this.onComplete?.();
+
+        setTimeout(() => {
+            this.root.classList.add('fade-out');
+            setTimeout(() => this.hide(), 400);
+        }, 700);
+    }
+
+    private hasMoved(pos: { x: number; y: number; z: number }): boolean {
+        const moved = this.lastPos !== undefined &&
+            Math.hypot(pos.x - this.lastPos.x, pos.y - this.lastPos.y, pos.z - this.lastPos.z) > MOTION_THRESHOLD;
         this.lastPos = { x: pos.x, y: pos.y, z: pos.z };
+        return moved;
     }
 
     private updateUI(p: number, msg: string): void {
@@ -91,6 +141,7 @@ export class SpatialMappingOverlay {
         this.percentLabel.textContent = `${pct}%`;
         this.subtitle.textContent = msg;
     }
+
 
     private buildDOM(isDevMode: boolean): void {
         this.root.className = 'ar-scan-overlay';
@@ -128,7 +179,7 @@ export class SpatialMappingOverlay {
         this.percentLabel = this.root.querySelector('.ar-scan-pct')!;
 
         const skip = this.root.querySelector<HTMLButtonElement>('.ar-scan-skip');
-        if (skip) skip.onclick = (e) => { e.stopPropagation(); this.step(1); };
+        if (skip) skip.onclick = (e) => { e.stopPropagation(); this.complete(); };
 
         this.root.addEventListener('beforexrselect', (e) => e.preventDefault());
     }
