@@ -97,7 +97,7 @@ export class UIManager {
         this.btnMode.className = 'ar-quick-btn btn-mode edit';
         this.modeCaption.className = 'ar-quick-caption';
         const modeItem = document.createElement('div');
-        modeItem.className = 'ar-quick-item';
+        modeItem.className = 'ar-quick-item orientation-aware-panel';
         modeItem.append(this.btnMode, this.modeCaption);
 
         this.btnModel.className = 'ar-quick-btn btn-model';
@@ -106,7 +106,7 @@ export class UIManager {
         modelCaption.className = 'ar-quick-caption';
         modelCaption.textContent = 'Modèles';
         const modelItem = document.createElement('div');
-        modelItem.className = 'ar-quick-item';
+        modelItem.className = 'ar-quick-item orientation-aware-panel';
         modelItem.append(this.btnModel, modelCaption);
 
         this.quickContainer.append(modeItem, modelItem);

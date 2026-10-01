@@ -17,6 +17,7 @@ import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
 import { ModeHistoryManager } from './history/historyManager.js';
 import { TutorialEventBus } from './tutorial/tutorialEvents.js';
 import { TutorialManager } from './tutorial/tutorialManager.js';
+import { OrientationLayer } from './ui/orientationLayer.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
@@ -61,6 +62,7 @@ let perf: PerfProbe;
 let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let tutorial: TutorialManager;
+let orientationLayer: OrientationLayer;
 
 /**
  * The tutorial observes the app through this bus. Emitting is the app's only
@@ -115,9 +117,12 @@ function init(): void {
     controller2.addEventListener('select', (event) => { onSelect(event.data); });
     xrRig.add(controller2);
 
+    orientationLayer = new OrientationLayer();
+    orientationLayer.attach(document.body);
+
     pickHelper = new PickHelper();
     perf = new PerfProbe({ visible: false });
-    perf.mount(document.body);
+    perf.mount(orientationLayer.element);
 
     historyManager = new ModeHistoryManager('edit', (canUndo, canRedo) => {
         uiManager?.updateHistoryState(canUndo, canRedo);
@@ -139,7 +144,7 @@ function init(): void {
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
     );
 
-    uiManager.attach(document.body);
+    uiManager.attach(orientationLayer.element);
     historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
@@ -155,7 +160,7 @@ function init(): void {
             tutorialEvents.emit({ kind: 'scene-rotated', deltaRad });
         }
     });
-    joystick.attach(document.body);
+    joystick.attach(orientationLayer.element);
 
     // The tour waits for mapping: its first step places a model, which needs a
     // surface, and its cards would otherwise stack under the scan overlay.
@@ -175,7 +180,7 @@ function init(): void {
             }
         }
     }, isDevMode);
-    spatialMappingOverlay.attach(document.body);
+    spatialMappingOverlay.attach(orientationLayer.element);
 
     editMode = new EditMode({
         joystick,
@@ -272,7 +277,7 @@ function init(): void {
         },
         isDevMode,
     });
-    tutorial.attach(document.body);
+    tutorial.attach(orientationLayer.element);
 
     if (isDevMode) {
         devTick = setupDevMode(scene, camera, renderer, uiManager, spatialMappingOverlay);
