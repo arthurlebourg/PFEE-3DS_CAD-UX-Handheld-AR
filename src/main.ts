@@ -610,6 +610,10 @@ function resetSceneState(): void {
     editMode.resetScaleState();
     editMode.clearSelection();
     pickHelper.clearSelection();
+
+    // The tour's actions were recorded as it went; undoing them now would
+    // replay state this reset just wiped.
+    historyManager.clearAll();
 }
 
 /**
