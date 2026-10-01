@@ -43,6 +43,8 @@ export class GestureRecognizer {
     private suppressNextSelect = false;
     /** True when the current touch began on interactive UI. */
     private touchIgnored = false;
+    /** Whether the latest primary pointer went down on interactive UI. */
+    private pointerDownOnUI = false;
 
     private startX = 0;
     private startY = 0;
@@ -58,6 +60,17 @@ export class GestureRecognizer {
     }
 
     public attach(parent: HTMLElement): void {
+        // Capture phase, so this runs before any UI handler: buttons act on
+        // pointerdown and may hide their own menu (the tutorial's "Commencer"
+        // does), and once it is gone neither touchstart nor the browser's
+        // beforexrselect hit test can tell the touch began on UI.
+        parent.addEventListener('pointerdown', (event) => {
+            if (event.isPrimary) {
+                const target = event.target as HTMLElement | null;
+                this.pointerDownOnUI = !!target?.closest(UI_SELECTOR);
+            }
+        }, { capture: true });
+
         parent.addEventListener('beforexrselect', (event) => {
             if (this.holdActive || this.pinchActive || this.suppressNextSelect) {
                 event.preventDefault();
@@ -114,9 +127,13 @@ export class GestureRecognizer {
             // leftover select-suppression so it doesn't swallow this tap.
             this.suppressNextSelect = false;
 
-            const target = event.target as HTMLElement | null;
-            this.touchIgnored = !!target?.closest(UI_SELECTOR);
-            if (this.touchIgnored) return;
+            this.touchIgnored = this.pointerDownOnUI;
+            if (this.touchIgnored) {
+                // A tap on a menu must never reach the scene, even when the
+                // menu hid itself before the XR select was hit-tested.
+                this.suppressNextSelect = true;
+                return;
+            }
 
             const touch = event.touches[0];
             this.startX = touch.clientX;

@@ -98,7 +98,7 @@ export class UIManager {
 
         this.quickContainer.append(modeItem, modelItem);
 
-        // Help sits top-right, away from the quick column: a third item there
+        // Help sits top-left, away from the quick column: a third item there
         // would push the column past the top of a phone held in landscape.
         this.btnHelp.className = 'ar-help-btn';
         this.btnHelp.innerHTML = `<i data-lucide="circle-question-mark"></i>`;
@@ -447,7 +447,7 @@ export class UIManager {
             .ar-help-btn {
                 position: absolute;
                 top: 20px;
-                right: 20px;
+                left: 20px;
                 width: 44px;
                 height: 44px;
                 border-radius: 50%;

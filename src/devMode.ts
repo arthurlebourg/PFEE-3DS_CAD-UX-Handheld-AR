@@ -33,7 +33,7 @@ export function setupDevMode(
 
   const hud = document.createElement('div');
   hud.style.cssText = `
-    position: fixed; top: 12px; left: 12px;
+    position: fixed; top: 76px; left: 12px;
     background: rgba(0,0,0,0.6); color: #0f0;
     font: 12px monospace; padding: 8px 12px;
     border-radius: 4px; pointer-events: none; z-index: 999;

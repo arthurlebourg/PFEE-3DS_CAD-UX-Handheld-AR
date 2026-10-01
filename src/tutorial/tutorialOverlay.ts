@@ -105,7 +105,7 @@ export class TutorialOverlay {
         this.renderModal({
             kicker: 'Prise en main',
             title: `${stepCount} gestes, une minute`,
-            body: "Un guide pas à pas vous fait essayer chaque geste directement sur la scène. Vous pouvez le quitter à tout moment, et le relancer via le bouton ? en haut à droite.",
+            body: "Un guide pas à pas vous fait essayer chaque geste directement sur la scène. Vous pouvez le quitter à tout moment, et le relancer via le bouton ? en haut à gauche.",
             glyph: 'ui-tap',
             actions: [
                 { label: 'Plus tard', primary: false, action: () => this.callbacks.onQuit() },
@@ -121,7 +121,7 @@ export class TutorialOverlay {
         this.renderModal({
             kicker: 'Terminé',
             title: 'Vous avez tous les gestes en main',
-            body: "Le bouton ? en haut à droite les rappelle à tout moment. La scène a été modifiée pendant le guide : vous pouvez la remettre à zéro.",
+            body: "Le bouton ? en haut à gauche les rappelle à tout moment. La scène a été modifiée pendant le guide : vous pouvez la remettre à zéro.",
             glyph: 'check',
             actions: [
                 {
@@ -195,6 +195,7 @@ export class TutorialOverlay {
     private positionSpotlight(): void {
         if (!this.currentTarget) {
             this.spot.classList.remove('visible');
+            this.modal.classList.remove('with-hole');
             return;
         }
 
@@ -203,6 +204,7 @@ export class TutorialOverlay {
         // rect: ringing them would point at nothing.
         if (!rect || rect.width < 1 || rect.height < 1) {
             this.spot.classList.remove('visible');
+            this.modal.classList.remove('with-hole');
             return;
         }
 
@@ -214,6 +216,13 @@ export class TutorialOverlay {
         this.spot.style.borderRadius = `${String(Math.min(rect.width, rect.height) / 2 + padding)}px`;
         this.spot.classList.toggle('scrim', this.currentScrim);
         this.spot.classList.add('visible');
+
+        // The ring sits above the modal backdrop, but the button it rings sits
+        // below it: punch a hole in the dim + blur exactly the button's size.
+        this.modal.style.setProperty('--hole-x', `${String(rect.left + rect.width / 2)}px`);
+        this.modal.style.setProperty('--hole-y', `${String(rect.top + rect.height / 2)}px`);
+        this.modal.style.setProperty('--hole-r', `${String(Math.max(rect.width, rect.height) / 2)}px`);
+        this.modal.classList.add('with-hole');
     }
 
     // -------------------------------------------------------------------------

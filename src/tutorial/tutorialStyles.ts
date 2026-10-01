@@ -31,6 +31,8 @@ export function injectTutorialStyles(): void {
                    and a ring painted under the dim is no ring at all. */
                 z-index: 2;
                 pointer-events: none;
+                /* Keep the border inside the box so the ring stays centred on its target. */
+                box-sizing: border-box;
                 border: 2px solid var(--ar-tut-accent);
                 opacity: 0;
                 transition: opacity 0.3s;
@@ -52,8 +54,8 @@ export function injectTutorialStyles(): void {
             .ar-tutorial-card {
                 position: absolute;
                 top: 16px;
-                left: 16px;
-                right: 76px;
+                left: 76px;
+                right: 16px;
                 max-width: 520px;
                 padding: 14px 16px;
                 border-radius: 18px;
@@ -184,6 +186,13 @@ export function injectTutorialStyles(): void {
             }
 
             .ar-tutorial-modal.visible { display: flex; }
+
+            .ar-tutorial-modal.with-hole {
+                -webkit-mask: radial-gradient(circle at var(--hole-x) var(--hole-y),
+                    transparent var(--hole-r), #000 calc(var(--hole-r) + 1px));
+                mask: radial-gradient(circle at var(--hole-x) var(--hole-y),
+                    transparent var(--hole-r), #000 calc(var(--hole-r) + 1px));
+            }
 
             .ar-tut-modal-card {
                 width: 100%;
