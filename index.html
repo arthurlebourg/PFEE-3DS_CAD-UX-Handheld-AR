@@ -10,6 +10,8 @@
       margin: 0;
       overflow: hidden;
       background-color: #000;
+      /* Chrome Android paints a square box over tapped elements, ignoring their rounded shape. */
+      -webkit-tap-highlight-color: transparent;
     }
 
     canvas {

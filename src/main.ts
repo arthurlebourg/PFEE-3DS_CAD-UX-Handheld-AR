@@ -4,17 +4,25 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { isDevMode, setupDevMode } from './devMode.js';
 
-import { UIManager } from './ui.js';
-import { PickHelper } from './picking.js';
-import { PerfProbe } from './perf.js';
-import { VirtualJoycon } from './virtualJoycon.js';
-import { SceneRotator } from './sceneRotator.js';
+import { UIManager } from './ui/uiManager.js';
+import { PerfProbe } from './ui/perf.js';
+import { JoystickWidget } from './ui/joystickWidget.js';
+import { PickHelper } from './scene/picking.js';
+import { SceneRotator } from './scene/sceneRotator.js';
+import { GestureRecognizer } from './input/gestureRecognizer.js';
+import { ModeManager } from './modes/modeManager.js';
+import { EditMode } from './modes/editMode.js';
+import { InspectMode } from './modes/inspectMode.js';
+import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
+import { ModeHistoryManager } from './history/historyManager.js';
+import { TutorialEventBus } from './tutorial/tutorialEvents.js';
+import { TutorialManager } from './tutorial/tutorialManager.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
-    modelUrls[filename] = modules[path];
+    modelUrls[filename] = modules[path] as string;
 }
 const availableModels = Object.keys(modelUrls);
 
@@ -46,10 +54,25 @@ let hitTestSourceRequested = false;
 let devTick: (() => void) | null = null;
 
 let uiManager: UIManager;
-let virtualJoycon: VirtualJoycon;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
 let perf: PerfProbe;
+
+let gestureRecognizer: GestureRecognizer;
+let modeManager: ModeManager;
+let tutorial: TutorialManager;
+
+/**
+ * The tutorial observes the app through this bus. Emitting is the app's only
+ * concession to it: modes keep owning every gesture, so a tutorial step is
+ * validated by the effect the user actually saw in the scene.
+ */
+const tutorialEvents = new TutorialEventBus();
+let editMode: EditMode;
+let inspectMode: InspectMode;
+let spatialMappingOverlay: SpatialMappingOverlay;
+let historyManager: ModeHistoryManager;
+let rotateStartAngle = 0;
 
 init();
 
@@ -96,43 +119,166 @@ function init(): void {
     perf = new PerfProbe({ visible: false });
     perf.mount(document.body);
 
+    historyManager = new ModeHistoryManager('edit', (canUndo, canRedo) => {
+        uiManager?.updateHistoryState(canUndo, canRedo);
+    });
+
     uiManager = new UIManager(
-        (isPlacement) => {
-            if (!isPlacement && previewModel) {
-                previewModel.visible = false;
-            }
-        },
-        () => {},
-        (modelName) => {
-            loadModel(modelName);
-        },
-        (showPerf) => {
-            perf.setVisible(showPerf);
-        },
-        (scale) => {
-            updateRigScale(scale);
+        {
+            onModeToggle: () => modeManager.toggle(),
+            onModelSelect: (modelName) => loadModel(modelName),
+            onDelete: () => deleteSelectedModel(),
+            onReset: () => resetSelectedModel(),
+            onInvertSelection: () => invertSelection(),
+            onUndo: () => historyManager.undo(),
+            onRedo: () => historyManager.redo(),
+            onPerfToggle: (showPerf) => perf.setVisible(showPerf),
+            onHelp: () => tutorial.toggleCheatSheet(),
         },
         availableModels,
         isDevMode  // ← active les boutons debug (perf, picking colors) en dev uniquement
     );
 
     uiManager.attach(document.body);
+    historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
-    virtualJoycon = new VirtualJoycon((strength) => {
+    const joystick = new JoystickWidget((strength) => {
         const maxSpeed = 0.06;
+        const deltaRad = strength * maxSpeed;
 
-        sceneRotator.rotateAroundCenter(
-            xrRig,
-            placedModels,
-            strength * maxSpeed,
-        );
+        sceneRotator.rotateAroundCenter(xrRig, placedModels, deltaRad);
+
+        // With nothing placed the rotation is a no-op, so it must not count
+        // towards the tutorial's rotation step either.
+        if (placedModels.length > 0) {
+            tutorialEvents.emit({ kind: 'scene-rotated', deltaRad });
+        }
+    });
+    joystick.attach(document.body);
+
+    // The tour waits for mapping: its first step places a model, which needs a
+    // surface, and its cards would otherwise stack under the scan overlay.
+    spatialMappingOverlay = new SpatialMappingOverlay(() => {
+        if (!isDevMode) {
+            modeManager.setMode('edit');
+            editMode.arm();
+            tutorial.offerOnFirstRun();
+        } else {
+            if (devModel) {
+                devModel.visible = true;
+            }
+            // ?tutorial=1 iterates on the overlay without a headset. The AR-only
+            // placement step is filtered out, since dev mode has no hit-testing.
+            if (new URLSearchParams(window.location.search).get('tutorial') === '1') {
+                tutorial.replay();
+            }
+        }
+    }, isDevMode);
+    spatialMappingOverlay.attach(document.body);
+
+    editMode = new EditMode({
+        joystick,
+        placeModel: () => {
+            if (!spatialMappingOverlay.isComplete) {
+                return false;
+            }
+            if (previewModel?.visible && loadedModel) {
+                placeModel();
+                tutorialEvents.emit({ kind: 'model-placed' });
+                return true;
+            }
+            return false;
+        },
+        onRigScale: (scale) => {
+            updateRigScale(scale);
+            tutorialEvents.emit({ kind: 'scale-changed', perceived: 1 / scale });
+        },
+        pickModel: (inputSource) => {
+            const mesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
+            return mesh ? findRootPlacedModel(mesh) : null;
+        },
+        highlightModel: (model) => {
+            pickHelper.highlightModel(model);
+        },
+        unhighlightModel: (model) => {
+            pickHelper.unhighlightModel(model);
+        },
+        onSelectionChange: (model) => {
+            uiManager.setModelActionsVisible(model !== null);
+            tutorialEvents.emit({ kind: 'model-selected', selected: model !== null });
+        },
+        onAction: (action) => {
+            historyManager.push('edit', action);
+        },
+        onRotateStart: () => {
+            rotateStartAngle = sceneRotator.getAngle();
+        },
+        onRotateEnd: () => {
+            const start = rotateStartAngle;
+            const end = sceneRotator.getAngle();
+            if (Math.abs(end - start) > 0.01) {
+                historyManager.push('edit', {
+                    description: 'Rotation scène',
+                    undo: () => {
+                        sceneRotator.setAngle(start, xrRig, placedModels);
+                    },
+                    redo: () => {
+                        sceneRotator.setAngle(end, xrRig, placedModels);
+                    },
+                });
+            }
+        },
     });
 
-    virtualJoycon.attach(document.body);
+    inspectMode = new InspectMode({
+        pickHelper,
+        pickMesh: (inputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf),
+        onExplode: (factor) => {
+            explode(factor);
+            tutorialEvents.emit({ kind: 'explode-changed', factor });
+        },
+        onPartPicked: () => {
+            tutorialEvents.emit({ kind: 'part-picked' });
+        },
+        onPartHidden: () => {
+            tutorialEvents.emit({ kind: 'part-hidden' });
+        },
+        onAction: (action) => {
+            historyManager.push('inspect', action);
+        },
+    });
+
+    modeManager = new ModeManager(editMode, inspectMode, (mode) => {
+        uiManager.setMode(mode);
+        historyManager.setMode(mode);
+        if (mode === 'inspect' && previewModel) {
+            previewModel.visible = false;
+        }
+        tutorialEvents.emit({ kind: 'mode-changed', mode });
+    });
+
+    gestureRecognizer = new GestureRecognizer(modeManager, (gesture) => {
+        tutorialEvents.emit({ kind: 'gesture', gesture });
+    });
+    gestureRecognizer.attach(document.body);
+
+    tutorial = new TutorialManager({
+        events: tutorialEvents,
+        spotlightRect: (target) => uiManager.getSpotlightRect(target),
+        currentMode: () => modeManager.currentName,
+        resetScene: () => {
+            resetSceneState();
+        },
+        isDevMode,
+    });
+    tutorial.attach(document.body);
 
     if (isDevMode) {
-        devTick = setupDevMode(scene, camera, renderer, uiManager);
+        devTick = setupDevMode(scene, camera, renderer, uiManager, spatialMappingOverlay);
+        // No AR hit-testing in dev mode, so placement is useless: inspecting
+        // (picking, explode) is the relevant default.
+        modeManager.setMode('inspect');
     } else {
         const arButtonOptions = {
             requiredFeatures: ['hit-test'],
@@ -143,10 +289,13 @@ function init(): void {
 
         renderer.xr.addEventListener('sessionstart', () => {
             uiManager.toggleVisibility(true);
+            spatialMappingOverlay.start();
         });
         renderer.xr.addEventListener('sessionend', () => {
             uiManager.toggleVisibility(false);
             perf.setVisible(false);
+            tutorial.stop();
+            spatialMappingOverlay.hide();
         });
     }
 
@@ -155,6 +304,11 @@ function init(): void {
     }
 
     window.addEventListener('resize', onWindowResize);
+    window.addEventListener('keydown', (event) => {
+        if (event.key === 'i' || event.key === 'I') {
+            invertSelection();
+        }
+    });
 }
 
 /**
@@ -202,39 +356,34 @@ function loadModel(modelName: string): void {
             devModel = loadedModel.clone();
             devModel.applyMatrix4(currentScaleMatrix);
             devModel.position.set(0, 1.5, -2);
+            devModel.visible = spatialMappingOverlay ? spatialMappingOverlay.isComplete : true;
+
+            // Save original transforms for the Reset action
+            devModel.userData.originalPosition = devModel.position.clone();
+            devModel.userData.originalQuaternion = devModel.quaternion.clone();
+            devModel.userData.originalModelScale = devModel.scale.clone();
+
             scene.add(devModel);
             pickHelper.registerModel(devModel);
-        } else if (uiManager) {
-            uiManager.forcePlacementMode(true);
+        } else {
+            // Selecting a model in the carousel arms placement: the next tap
+            // in Edit mode will place it once mapping is complete.
+            if (spatialMappingOverlay.isComplete) {
+                modeManager.setMode('edit');
+                editMode.arm();
+            }
         }
     });
 }
 
 /**
- * Handles select events on the screen, triggering GPU picking and piece selection.
+ * Handles select events on the screen. The GestureRecognizer decides whether
+ * this is a genuine tap (or double tap) and dispatches it to the active mode.
  */
 function onSelect(inputSource?: XRInputSource): void {
-    if (!renderer.xr.isPresenting) return;
+    if (!renderer.xr.isPresenting || !spatialMappingOverlay.isComplete) return;
 
-    if (virtualJoycon.consumeTap()) return;
-
-    // In placement mode a tap only ever places a model; picking is disabled.
-    if (uiManager.isPlacementMode) {
-        if (previewModel?.visible && loadedModel) {
-            placeModel();
-        }
-        return;
-    }
-
-    const pickedMesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
-
-    if (pickedMesh) {
-        pickHelper.handleMeshSelection(pickedMesh, camera);
-    } else if (pickHelper.attachedParts.length > 0) {
-        pickHelper.attachedParts = [];
-    } else if (pickHelper.selectedMeshes.length > 0) {
-        pickHelper.clearSelection();
-    }
+    gestureRecognizer.handleXRSelect(inputSource);
 }
 
 /**
@@ -285,11 +434,330 @@ function placeModel(): void {
         model.userData.physicalPosition = previewPose.physicalPosition.clone();
         model.userData.physicalRotation = previewPose.physicalRotation.clone();
     }
-    
+
+    // Save original scale (including auto-fit scale) for the Reset action
+    model.userData.originalModelScale = model.scale.clone();
+
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
     sceneRotator.refresh(xrRig, placedModels);
+
+    historyManager.push('edit', {
+        description: 'Placer modèle',
+        undo: () => {
+            if (editMode.selectedModel === model) {
+                editMode.clearSelection();
+                pickHelper.clearSelection();
+            }
+            pickHelper.removeModel(model);
+            scene.remove(model);
+            const idx = placedModels.indexOf(model);
+            if (idx !== -1) {
+                placedModels.splice(idx, 1);
+            }
+            sceneRotator.refresh(xrRig, placedModels);
+        },
+        redo: () => {
+            scene.add(model);
+            placedModels.push(model);
+            pickHelper.registerModel(model);
+            sceneRotator.refresh(xrRig, placedModels);
+        },
+    });
+}
+
+/**
+ * Finds the root placed model (or the dev model) containing a given child.
+ */
+function findRootPlacedModel(object: THREE.Object3D): THREE.Object3D | null {
+    let curr: THREE.Object3D | null = object;
+    while (curr) {
+        if (placedModels.includes(curr) || curr === devModel) {
+            return curr;
+        }
+        curr = curr.parent;
+    }
+    return null;
+}
+
+/**
+ * Deletes the model currently selected in Edit mode from the scene.
+ */
+function deleteSelectedModel(): void {
+    const model = editMode.selectedModel;
+    if (!model) return;
+
+    const index = placedModels.indexOf(model);
+    const wasDevModel = (model === devModel);
+
+    // Unhighlights the model and hides the Delete/Reset buttons.
+    editMode.clearSelection();
+    pickHelper.clearSelection();
+
+    pickHelper.removeModel(model);
+    scene.remove(model);
+
+    if (index !== -1) {
+        placedModels.splice(index, 1);
+    }
+    if (model === devModel) {
+        devModel = null;
+    }
+
+    sceneRotator.refresh(xrRig, placedModels);
+
+    historyManager.push('edit', {
+        description: 'Supprimer modèle',
+        undo: () => {
+            scene.add(model);
+            if (index >= 0 && index <= placedModels.length) {
+                placedModels.splice(index, 0, model);
+            } else {
+                placedModels.push(model);
+            }
+            if (wasDevModel) {
+                devModel = model;
+            }
+            pickHelper.registerModel(model);
+            sceneRotator.refresh(xrRig, placedModels);
+            editMode.selectModel(model);
+        },
+        redo: () => {
+            if (editMode.selectedModel === model) {
+                editMode.clearSelection();
+                pickHelper.clearSelection();
+            }
+            pickHelper.removeModel(model);
+            scene.remove(model);
+            const idx = placedModels.indexOf(model);
+            if (idx !== -1) {
+                placedModels.splice(idx, 1);
+            }
+            if (model === devModel) {
+                devModel = null;
+            }
+            sceneRotator.refresh(xrRig, placedModels);
+        },
+    });
+}
+
+/**
+ * Executes the actual reset of transforms and inspect state on a model.
+ */
+function doResetModel(model: THREE.Object3D): void {
+    // Drop Inspect-side state first: piece selection, hidden pieces, and the
+    // committed explode factor (positions are restored below).
+    pickHelper.clearSelection();
+    inspectMode.showAllHidden(false);
+    inspectMode.resetExplodeState();
+
+    // Reset camera rig rotation and perceived scale to their default values.
+    sceneRotator.reset(xrRig);
+    updateRigScale(1.0);
+    editMode.resetScaleState();
+
+    // Restore every part's original local transform (saved at registration).
+    model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        if (child.userData.originalPosition) {
+            child.position.copy(child.userData.originalPosition as THREE.Vector3);
+        }
+        if (child.userData.originalQuaternion) {
+            child.quaternion.copy(child.userData.originalQuaternion as THREE.Quaternion);
+        }
+        if (child.userData.originalScale) {
+            child.scale.copy(child.userData.originalScale as THREE.Vector3);
+        }
+    });
+
+    // Restore the model's own pose and scale.
+    if (model === devModel) {
+        if (model.userData.originalPosition) {
+            model.position.copy(model.userData.originalPosition as THREE.Vector3);
+        }
+        if (model.userData.originalQuaternion) {
+            model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
+        }
+    } else {
+        const pose = model.userData as PhysicalPose;
+        if (pose.physicalPosition && pose.physicalRotation) {
+            model.position.copy(pose.physicalPosition);
+            model.quaternion.copy(pose.physicalRotation);
+        }
+    }
+    if (model.userData.originalModelScale) {
+        model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
+    }
+
+    sceneRotator.refresh(xrRig, placedModels);
+}
+
+/**
+ * Undoes what a tutorial run leaves behind: hidden pieces, an exploded view,
+ * a rotated rig and a changed perceived scale.
+ *
+ * Unlike the Réinitialiser button this needs no selection — the tour never
+ * requires one — and it leaves each model's own pose alone.
+ */
+function resetSceneState(): void {
+    inspectMode.showAllHidden();
+    inspectMode.resetExplodeState();
+    explode(0);
+
+    sceneRotator.reset(xrRig);
+    updateRigScale(1.0);
+    editMode.resetScaleState();
+    editMode.clearSelection();
+    pickHelper.clearSelection();
+
+    // The tour's actions were recorded as it went; undoing them now would
+    // replay state this reset just wiped.
+    historyManager.clearAll();
+}
+
+/**
+ * Inverts the current piece selection in Inspect mode (or globally).
+ */
+function invertSelection(): void {
+    if (modeManager.currentName === 'inspect') {
+        inspectMode.invertSelection();
+    } else {
+        pickHelper.invertSelection();
+    }
+}
+
+/**
+ * Resets the model currently selected in Edit mode: reassembles its parts
+ * (undoing explode and hidden pieces), restores its
+ * original pose and scale, and resets the rig rotation and perceived scale.
+ */
+function resetSelectedModel(): void {
+    const model = editMode.selectedModel;
+    if (!model) return;
+
+    // Snapshot state before reset
+    const prevModelPos = model.position.clone();
+    const prevModelQuat = model.quaternion.clone();
+    const prevModelScale = model.scale.clone();
+
+    const meshTransforms = new Map<THREE.Mesh, {
+        position: THREE.Vector3;
+        quaternion: THREE.Quaternion;
+        scale: THREE.Vector3;
+        visible: boolean;
+    }>();
+
+    model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const mesh = child as THREE.Mesh;
+        meshTransforms.set(mesh, {
+            position: mesh.position.clone(),
+            quaternion: mesh.quaternion.clone(),
+            scale: mesh.scale.clone(),
+            visible: mesh.visible,
+        });
+    });
+
+    const previousRigScale = rigScale;
+    const previousRigAngle = sceneRotator.getAngle();
+    const previousExplodeFactor = inspectMode.getExplodeFactor();
+
+    doResetModel(model);
+
+    historyManager.push('edit', {
+        description: 'Réinitialiser modèle',
+        undo: () => {
+            model.position.copy(prevModelPos);
+            model.quaternion.copy(prevModelQuat);
+            model.scale.copy(prevModelScale);
+
+            for (const [mesh, t] of meshTransforms) {
+                mesh.position.copy(t.position);
+                mesh.quaternion.copy(t.quaternion);
+                mesh.scale.copy(t.scale);
+                mesh.visible = t.visible;
+            }
+
+            sceneRotator.setAngle(previousRigAngle, xrRig, placedModels);
+            updateRigScale(previousRigScale);
+            editMode.setPerceivedScale(1 / previousRigScale);
+            inspectMode.setExplodeFactor(previousExplodeFactor);
+
+            sceneRotator.refresh(xrRig, placedModels);
+            editMode.selectModel(model);
+        },
+        redo: () => {
+            doResetModel(model);
+            editMode.selectModel(model);
+        },
+    });
+}
+
+/**
+ * Applies an exploded-view offset to every placed (and, in dev mode, the dev)
+ * model. A factor of 0 restores the assembled pose; higher factors push each
+ * part radially outward from its own model's center.
+ */
+function explode(factor: number): void {
+    const models = devModel ? [...placedModels, devModel] : placedModels;
+
+    for (const model of models) {
+        prepareExplode(model);
+
+        model.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) return;
+            const rest = child.userData.explodeRest as THREE.Vector3 | undefined;
+            const dir = child.userData.explodeDir as THREE.Vector3 | undefined;
+            if (!rest || !dir) return;
+
+            child.position.copy(rest).addScaledVector(dir, factor);
+        });
+    }
+}
+
+/**
+ * Caches, once per model, each part's assembled local position and the radial
+ * direction (in that part's parent local space) that points away from the
+ * model center. Precomputing keeps the per-gesture {@link explode} pass cheap.
+ */
+function prepareExplode(model: THREE.Object3D): void {
+    if (model.userData.explodePrepared) return;
+
+    model.updateWorldMatrix(true, true);
+    const modelCenter = new THREE.Box3()
+        .setFromObject(model)
+        .getCenter(new THREE.Vector3());
+
+    const meshCenter = new THREE.Vector3();
+    const offset = new THREE.Vector3();
+    const parentInverse = new THREE.Matrix4();
+    const toParentLocal = new THREE.Matrix3();
+
+    model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const mesh = child as THREE.Mesh;
+
+        mesh.geometry.computeBoundingBox();
+        const box = mesh.geometry.boundingBox;
+        if (!box) return;
+
+        // World-space center of this part...
+        box.getCenter(meshCenter).applyMatrix4(mesh.matrixWorld);
+        // ...as a radial offset from the model center, rotated/scaled into the
+        // part's parent local frame so it adds straight onto mesh.position.
+        offset.copy(meshCenter).sub(modelCenter);
+        if (mesh.parent) {
+            parentInverse.copy(mesh.parent.matrixWorld).invert();
+            toParentLocal.setFromMatrix4(parentInverse);
+            offset.applyMatrix3(toParentLocal);
+        }
+
+        mesh.userData.explodeRest = mesh.position.clone();
+        mesh.userData.explodeDir = offset.clone();
+    });
+
+    model.userData.explodePrepared = true;
 }
 
 /**
@@ -333,6 +801,10 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
     devTick?.();
 
+    if (isDevMode && spatialMappingOverlay) {
+        spatialMappingOverlay.updateDev(camera);
+    }
+
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
@@ -350,10 +822,14 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             hitTestSourceRequested = true;
         }
 
-        if (hitTestSource && referenceSpace && previewModel) {
+        let hasSurface = false;
+        if (hitTestSource && referenceSpace) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
+            hasSurface = hitTestResults.length > 0;
 
-            if (hitTestResults.length > 0 && uiManager.isPlacementMode) {
+            const placementArmed =
+                modeManager.currentName === 'edit' && editMode.isArmed;
+            if (hasSurface && placementArmed && spatialMappingOverlay.isComplete && previewModel) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
@@ -380,14 +856,15 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                     currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
                     previewModel.scale.copy(modelScale);
                 }
-            } else {
+            } else if (previewModel) {
                 previewModel.visible = false;
             }
         }
+
+        if (referenceSpace && spatialMappingOverlay) {
+            spatialMappingOverlay.updateWebXR(frame, referenceSpace, hasSurface);
+        }
     }
-
-    pickHelper.updateAttachedMeshes(camera);
-
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {

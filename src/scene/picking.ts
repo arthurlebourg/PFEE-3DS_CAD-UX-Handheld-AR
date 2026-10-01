@@ -1,10 +1,7 @@
 import * as THREE from 'three';
-import type { PerfProbe } from './perf.js';
+import type { PerfProbe } from '../ui/perf.js';
 
-interface AttachedPart {
-    mesh: THREE.Mesh;
-    offsetMatrix: THREE.Matrix4;
-}
+
 
 type MaterialBackup = { mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] };
 
@@ -23,7 +20,7 @@ export class PickHelper {
     public pickingTexture: THREE.WebGLRenderTarget;
 
     public selectedMeshes: THREE.Mesh[] = [];
-    public attachedParts: AttachedPart[] = [];
+
 
     private idToMeshMap = new Map<number, THREE.Mesh>();
     private nextId = 1;
@@ -64,6 +61,12 @@ export class PickHelper {
                 return;
             }
 
+            // Save original local transform (position, rotation/quaternion, scale)
+            // to support resetting the model without modifying its mesh geometry.
+            child.userData.originalPosition = child.position.clone();
+            child.userData.originalQuaternion = child.quaternion.clone();
+            child.userData.originalScale = child.scale.clone();
+
             const id = this.nextId++;
 
             const color = new THREE.Color();
@@ -86,7 +89,7 @@ export class PickHelper {
 
     /**
      * Unregisters every sub-mesh of a model: clears it from the id map, drops any
-     * selection/attachment state, and disposes the cached pick material.
+     * selection state, and disposes the cached pick material.
      */
     public removeModel(model: THREE.Object3D): void {
         model.traverse((child) => {
@@ -99,29 +102,16 @@ export class PickHelper {
                 }
             }
             this.selectedMeshes = this.selectedMeshes.filter((m) => m !== child);
-            this.attachedParts = this.attachedParts.filter((p) => p.mesh !== child);
+
             (child.userData.pickMaterial as THREE.Material | undefined)?.dispose();
+
+            delete child.userData.originalPosition;
+            delete child.userData.originalQuaternion;
+            delete child.userData.originalScale;
         });
     }
 
-    /**
-     * Smoothly updates the position of all attached parts to follow the camera.
-     */
-    public updateAttachedMeshes(camera: THREE.Camera) {
-        if (this.attachedParts.length === 0) {
-            return;
-        }
 
-        for (const part of this.attachedParts) {
-            if (!part.mesh.parent) continue;
-
-            const targetWorldMatrix = new THREE.Matrix4().multiplyMatrices(camera.matrixWorld, part.offsetMatrix);
-            const targetWorldPos = new THREE.Vector3().setFromMatrixPosition(targetWorldMatrix);
-
-            part.mesh.parent.worldToLocal(targetWorldPos);
-            part.mesh.position.lerp(targetWorldPos, 0.15);
-        }
-    }
 
     /**
      * Swaps every registered mesh to its flat id-material, returning the list of
@@ -242,58 +232,110 @@ export class PickHelper {
         }
     }
 
-    /**
-     * Handles the interaction logic for selecting, multi-selecting, and attaching meshes.
-     */
-    public handleMeshSelection(pickedMesh: THREE.Mesh, camera: THREE.Camera) {
+    public handleMeshSelection(pickedMesh: THREE.Mesh) {
         const isAlreadySelected = this.selectedMeshes.includes(pickedMesh);
 
         if (isAlreadySelected) {
-            if (this.attachedParts.length > 0) {
-                this.attachedParts = [];
-            } else {
-                this.attachSelectedMeshesToCamera(camera);
-            }
+            this.deselectMesh(pickedMesh);
         } else {
             this.selectedMeshes.push(pickedMesh);
             this.highlightMesh(pickedMesh);
-            this.attachedParts = [];
         }
     }
 
     /**
-     * Drops all attached pieces and clears the current selection.
+     * Highlights every mesh of a placed model, marking it as the selected
+     * model in Edit mode. Blue, to distinguish from the orange piece
+     * selection used in Inspect mode.
+     */
+    public highlightModel(model: THREE.Object3D, colorHex = 0x007bff): void {
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                this.highlightMesh(child as THREE.Mesh, colorHex);
+            }
+        });
+    }
+
+    /**
+     * Restores the original appearance of every mesh of a model highlighted
+     * by {@link highlightModel}.
+     */
+    public unhighlightModel(model: THREE.Object3D): void {
+        model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                this.removeHighlight(child as THREE.Mesh);
+            }
+        });
+    }
+
+    /**
+     * Removes a single mesh from the selection,
+     * restoring its original material.
+     */
+    public deselectMesh(mesh: THREE.Mesh): void {
+        if (!this.selectedMeshes.includes(mesh)) return;
+
+        this.removeHighlight(mesh);
+        this.selectedMeshes = this.selectedMeshes.filter((m) => m !== mesh);
+
+    }
+
+    /**
+     * Clears the current selection.
      */
     public clearSelection() {
         for (const mesh of this.selectedMeshes) {
             this.removeHighlight(mesh);
         }
         this.selectedMeshes = [];
-        this.attachedParts = [];
     }
 
     /**
-     * Binds all currently selected meshes to the camera for grouped movement.
+     * Checks whether a mesh and all its ancestors are visible.
      */
-    private attachSelectedMeshesToCamera(camera: THREE.Camera) {
-        this.attachedParts = [];
-        const cameraInverse = camera.matrixWorldInverse.clone();
-
-        for (const mesh of this.selectedMeshes) {
-            const meshWorldMatrix = mesh.matrixWorld;
-            const offsetMatrix = new THREE.Matrix4().multiplyMatrices(cameraInverse, meshWorldMatrix);
-
-            this.attachedParts.push({
-                mesh: mesh,
-                offsetMatrix: offsetMatrix
-            });
+    private isMeshVisible(mesh: THREE.Mesh): boolean {
+        let curr: THREE.Object3D | null = mesh;
+        while (curr) {
+            if (!curr.visible) return false;
+            curr = curr.parent;
         }
+        return true;
     }
 
     /**
-     * Visually highlights a mesh by setting its emissive color to bright orange.
+     * Inverts the current mesh selection: selects all unselected visible meshes
+     * and deselects all currently selected meshes.
      */
-    private highlightMesh(mesh: THREE.Mesh) {
+    public invertSelection(): void {
+        const uniqueMeshes = Array.from(new Set(this.idToMeshMap.values()));
+        const nextSelected: THREE.Mesh[] = [];
+
+        for (const mesh of uniqueMeshes) {
+            if (!this.isMeshVisible(mesh)) {
+                if (this.selectedMeshes.includes(mesh)) {
+                    this.removeHighlight(mesh);
+                }
+                continue;
+            }
+
+            if (this.selectedMeshes.includes(mesh)) {
+                this.removeHighlight(mesh);
+            } else {
+                this.highlightMesh(mesh);
+                nextSelected.push(mesh);
+            }
+        }
+
+        this.selectedMeshes = nextSelected;
+    }
+
+
+
+    /**
+     * Visually highlights a mesh by setting its emissive color (bright orange
+     * by default, for the Inspect piece selection).
+     */
+    private highlightMesh(mesh: THREE.Mesh, colorHex = 0xff6600) {
         if (!mesh.userData.isolatedMaterial) {
             mesh.material = (mesh.material as THREE.Material).clone();
             mesh.userData.isolatedMaterial = true;
@@ -306,7 +348,7 @@ export class PickHelper {
                 mesh.userData.originalEmissiveIntensity = material.emissiveIntensity;
             }
 
-            material.emissive.setHex(0xff6600);
+            material.emissive.setHex(colorHex);
 
             if ('emissiveIntensity' in material) {
                 material.emissiveIntensity = 0.6;
