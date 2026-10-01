@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { gestureArbiter, GestureType } from './gestureArbiter.js';
 
 /**
  * HierarchySlider: a Snap Map-style edge slider against the left screen edge
@@ -8,8 +7,8 @@ import { gestureArbiter, GestureType } from './gestureArbiter.js';
  * rest; on touch the rail widens, notches appear and a bubble shows the
  * current level's name. Dragging is relative (no jump on touch-down), the
  * thumb follows the finger freely, ticks a haptic pulse on each level and
- * springs to the nearest notch on release. Claims the Button slot in the
- * GestureArbiter for the duration of a drag.
+ * springs to the nearest notch on release. The GestureRecognizer ignores
+ * touches starting on the track, so a drag never doubles as a scene gesture.
  */
 export class HierarchySlider {
     private track = document.createElement('div');
@@ -23,9 +22,9 @@ export class HierarchySlider {
     private dragStartY = 0;
     private dragStartRatio = 0;
 
-    private readonly onLevelChange: (node: THREE.Object3D) => void;
+    private readonly onLevelChange: (node: THREE.Object3D, level: number) => void;
 
-    constructor(onLevelChange: (node: THREE.Object3D) => void) {
+    constructor(onLevelChange: (node: THREE.Object3D, level: number) => void) {
         this.onLevelChange = onLevelChange;
         this.injectStyles();
 
@@ -45,7 +44,6 @@ export class HierarchySlider {
             if (this.chain.length < 2) return;
             event.stopPropagation();
             event.preventDefault();
-            if (!gestureArbiter.tryStart(GestureType.Button)) return;
 
             this.dragging = true;
             this.dragStartY = event.clientY;
@@ -67,7 +65,6 @@ export class HierarchySlider {
             this.dragging = false;
             this.track.classList.remove('dragging');
             this.setThumbRatio(this.levelRatio(this.levelIndex));
-            gestureArbiter.end(GestureType.Button);
         };
         this.track.addEventListener('pointerup', endDrag);
         this.track.addEventListener('pointercancel', endDrag);
@@ -117,7 +114,7 @@ export class HierarchySlider {
             this.levelIndex = index;
             this.applyLevel();
             navigator.vibrate?.(8);
-            this.onLevelChange(this.chain[this.levelIndex]);
+            this.onLevelChange(this.chain[this.levelIndex], this.levelIndex);
         }
     }
 

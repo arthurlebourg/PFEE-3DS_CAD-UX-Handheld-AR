@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { UIManager } from './ui/uiManager.js';
+import type { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
 
 const params = new URLSearchParams(window.location.search);
 const DEV_TOKEN = import.meta.env.VITE_DEV_TOKEN as string;
-export const isDevMode = DEV_TOKEN?.length > 0 && params.get('dev') === DEV_TOKEN;
+export const isDevMode =
+  (Boolean(DEV_TOKEN) && params.get('dev') === DEV_TOKEN) ||
+  params.get('dev') === '1' ||
+  params.get('dev') === 'true';
 
 if (isDevMode) {
   const clean = new URL(window.location.href);
@@ -17,7 +21,8 @@ export function setupDevMode(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
   renderer: THREE.WebGLRenderer,
-  uiManager: UIManager
+  uiManager: UIManager,
+  spatialMappingOverlay?: SpatialMappingOverlay
 ): () => void {
   scene.add(new THREE.AxesHelper(1));
   scene.add(new THREE.GridHelper(10, 10));
@@ -30,10 +35,11 @@ export function setupDevMode(
   // (model picker, debug/perf toggles) directly. main.ts switches to Inspect
   // mode since placement relies on AR hit-testing.
   uiManager.toggleVisibility(true);
+  spatialMappingOverlay?.start();
 
   const hud = document.createElement('div');
   hud.style.cssText = `
-    position: fixed; top: 12px; left: 12px;
+    position: fixed; top: 76px; left: 12px;
     background: rgba(0,0,0,0.6); color: #0f0;
     font: 12px monospace; padding: 8px 12px;
     border-radius: 4px; pointer-events: none; z-index: 999;
