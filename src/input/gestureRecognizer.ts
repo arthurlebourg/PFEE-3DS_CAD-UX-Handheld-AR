@@ -17,7 +17,7 @@ const UI_SELECTOR =
  * Gesture vocabulary, as classified here. Observers get the raw gesture — what
  * the fingers did — not what it achieved in the scene.
  */
-export type GestureKind = 'tap' | 'doubleTap' | 'holdStart' | 'pinchStart';
+export type GestureKind = 'tap' | 'doubleTap' | 'holdStart' | 'pinchStart' | 'release';
 
 /**
  * GestureRecognizer: sole owner of raw touch input over the AR view.
@@ -40,6 +40,8 @@ export class GestureRecognizer {
     private holdTimer: number | null = null;
     private holdActive = false;
     private pinchActive = false;
+    /** True from a hold or pinch starting until every finger has lifted. */
+    private continuousGesture = false;
     /** True while a finished hold/pinch must swallow its trailing XR select. */
     private suppressNextSelect = false;
     /** True when the current touch began on interactive UI. */
@@ -144,6 +146,7 @@ export class GestureRecognizer {
 
             this.holdTimer = window.setTimeout(() => {
                 this.holdActive = true;
+                this.continuousGesture = true;
                 this.suppressNextSelect = true;
                 this.onGesture?.('holdStart');
                 this.modeManager.current.onHoldStart?.(this.startX, this.startY);
@@ -162,6 +165,7 @@ export class GestureRecognizer {
 
             this.pinchStartDistance = this.touchDistance(event.touches);
             this.pinchActive = true;
+            this.continuousGesture = true;
             this.suppressNextSelect = true;
             this.onGesture?.('pinchStart');
             this.modeManager.current.onPinchStart?.();
@@ -226,6 +230,10 @@ export class GestureRecognizer {
 
         if (event.touches.length === 0) {
             this.touchIgnored = false;
+            if (this.continuousGesture) {
+                this.continuousGesture = false;
+                this.onGesture?.('release');
+            }
         }
     }
 

@@ -49,6 +49,14 @@ const MIN_ROTATION_RAD = (20 * Math.PI) / 180;
 const MIN_EXPLODE_DELTA = 0.3;
 
 /**
+ * Continuous gestures complete when the fingers lift, not when the threshold
+ * is crossed: the user is still adjusting, and swapping the card under their
+ * fingers (or showing the finish screen) cuts the gesture short.
+ */
+const isRelease = (event: TutorialEvent): boolean =>
+    event.kind === 'gesture' && event.gesture === 'release';
+
+/**
  * The nine gestures, in the only order the app allows: nothing can be scaled,
  * rotated or inspected before a model exists in the scene, and the granularity
  * rail only exists once a piece is picked.
@@ -74,7 +82,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         body: 'Pincez à deux doigts pour agrandir ou réduire la scène entière.',
         glyph: 'pinch',
         hint: "Posez deux doigts sur l'écran, puis écartez-les franchement.",
-        isComplete: (_event, progress) => progress.scaleSpread >= MIN_SCALE_SPREAD,
+        isComplete: (event, progress) => isRelease(event) && progress.scaleSpread >= MIN_SCALE_SPREAD,
     },
     {
         id: 'rotate',
@@ -83,7 +91,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         body: 'Maintenez un doigt appuyé une seconde : un joystick apparaît. Glissez ensuite vers la gauche ou la droite.',
         glyph: 'hold-drag',
         hint: 'Gardez le doigt immobile une seconde complète, sans le lever, puis glissez horizontalement.',
-        isComplete: (_event, progress) => progress.rotationRad >= MIN_ROTATION_RAD,
+        isComplete: (event, progress) => isRelease(event) && progress.rotationRad >= MIN_ROTATION_RAD,
     },
     {
         id: 'select',
@@ -138,6 +146,6 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         body: "Pincez à deux doigts : le même geste qu'en Édition, mais ici il écarte les pièces les unes des autres.",
         glyph: 'pinch',
         hint: 'Écartez les deux doigts progressivement pour doser l\'éclatement.',
-        isComplete: (_event, progress) => progress.explodeDelta >= MIN_EXPLODE_DELTA,
+        isComplete: (event, progress) => isRelease(event) && progress.explodeDelta >= MIN_EXPLODE_DELTA,
     },
 ];

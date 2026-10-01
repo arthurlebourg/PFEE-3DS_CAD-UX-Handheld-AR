@@ -21,8 +21,9 @@ export type TutorialEvent =
     | { kind: 'explode-changed'; factor: number }
     /**
      * What the fingers did, regardless of what it achieved. Never completes a
-     * step — a 2 px pinch is not a lesson learned — it only lets the overlay
-     * tell "did nothing" from "started the gesture and stopped halfway".
+     * step on its own — a 2 px pinch is not a lesson learned. 'release' lets
+     * the threshold steps wait for the fingers to lift before moving on, so
+     * the next card never lands mid-gesture.
      */
     | { kind: 'gesture'; gesture: GestureKind };
 
