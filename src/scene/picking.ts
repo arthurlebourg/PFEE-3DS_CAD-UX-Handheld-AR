@@ -332,18 +332,49 @@ export class PickHelper {
         this.selectedMeshes = nextSelected;
     }
 
+    /**
+     * Ancestor chain of a picked mesh, from the piece itself up to the widest
+     * sub-assembly below the model root — the levels the granularity slider
+     * steps through.
+     *
+     * Levels are kept on what they add to the selection, not on whether they
+     * carry a name: CAD exports routinely leave every group node anonymous
+     * (names sit on the meshes), and skipping those would collapse an 8-level
+     * assembly into a single step. A group is kept only when it holds strictly
+     * more meshes than the level below, so the pure transform wrappers those
+     * same exports are full of never become steps that change nothing on
+     * screen.
+     */
     public getSelectableAncestorChain(mesh: THREE.Mesh): THREE.Object3D[] {
         const chain: THREE.Object3D[] = [mesh];
+        let selectedCount = 1;
         let current: THREE.Object3D | null = mesh.parent;
 
-        while (current && !this.registeredRoots.has(current)) {
-            if (current.name) {
+        while (current) {
+            const meshCount = this.countMeshes(current);
+            if (meshCount > selectedCount) {
                 chain.push(current);
+                selectedCount = meshCount;
             }
+            // The model root is a level like any other: on a flat export it is
+            // the only one there is, and without it the slider would never
+            // appear at all.
+            if (this.registeredRoots.has(current)) break;
             current = current.parent;
         }
 
         return chain;
+    }
+
+    /** Number of meshes in a node's subtree, itself included. */
+    public countMeshes(node: THREE.Object3D): number {
+        let count = 0;
+        node.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                count += 1;
+            }
+        });
+        return count;
     }
 
     public selectNode(node: THREE.Object3D): void {
