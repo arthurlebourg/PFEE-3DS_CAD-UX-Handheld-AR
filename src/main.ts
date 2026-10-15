@@ -347,6 +347,16 @@ function loadModel(modelName: string): void {
         const box = new THREE.Box3().setFromObject(loadedModel);
         const size = new THREE.Vector3();
         box.getSize(size);
+
+        // Re-pivot so the model rests on its origin: bottom of the bounding
+        // box at y = 0, centered in x/z. Shifting the direct children keeps the
+        // root free for the placement pose, and adds no level to the hierarchy.
+        const pivot = new THREE.Vector3();
+        box.getCenter(pivot);
+        pivot.y = box.min.y;
+        for (const child of loadedModel.children) {
+            child.position.sub(pivot);
+        }
         const maxDim = Math.max(size.x, size.y, size.z);
         const targetSize = 0.3; // 30 cm
         const scale = maxDim > 0 ? targetSize / maxDim : 1;

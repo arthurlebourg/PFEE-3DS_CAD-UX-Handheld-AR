@@ -4,8 +4,7 @@ import * as THREE from 'three';
  * HierarchySlider: a Snap Map-style edge slider against the left screen edge
  * that lets the user step through the ancestor chain of the currently
  * selected model part (e.g. Window -> Door -> Shell -> Car). Discreet at
- * rest; on touch the rail widens, notches appear and a bubble shows the
- * current level's name. Dragging is relative (no jump on touch-down), the
+ * rest; on touch the rail widens and notches appear. Dragging is relative (no jump on touch-down), the
  * thumb follows the finger freely, ticks a haptic pulse on each level and
  * springs to the nearest notch on release. The GestureRecognizer ignores
  * touches starting on the track, so a drag never doubles as a scene gesture.
@@ -13,7 +12,6 @@ import * as THREE from 'three';
 export class HierarchySlider {
     private track = document.createElement('div');
     private thumb = document.createElement('div');
-    private label = document.createElement('div');
     private ticks: HTMLDivElement[] = [];
 
     private chain: THREE.Object3D[] = [];
@@ -30,10 +28,9 @@ export class HierarchySlider {
 
         this.track.className = 'ar-hierarchy-slider';
         this.thumb.className = 'ar-hierarchy-thumb';
-        this.label.className = 'ar-hierarchy-label';
         const knob = document.createElement('div');
         knob.className = 'ar-hierarchy-knob';
-        this.thumb.append(knob, this.label);
+        this.thumb.appendChild(knob);
         this.track.appendChild(this.thumb);
     }
 
@@ -119,7 +116,6 @@ export class HierarchySlider {
     }
 
     private applyLevel(): void {
-        this.label.textContent = this.chain[this.levelIndex]?.name || 'Part';
         this.ticks.forEach((tick, i) => tick.classList.toggle('active', i === this.levelIndex));
     }
 
@@ -205,29 +201,6 @@ export class HierarchySlider {
             }
             .ar-hierarchy-slider.dragging .ar-hierarchy-knob {
                 transform: translate(-50%, -50%) scale(1.5);
-            }
-            .ar-hierarchy-label {
-                position: absolute;
-                left: 22px;
-                padding: 5px 11px;
-                border-radius: 14px;
-                background: rgba(15, 15, 20, 0.85);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                backdrop-filter: blur(12px);
-                -webkit-backdrop-filter: blur(12px);
-                color: #fff;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-size: 13px;
-                font-weight: 600;
-                white-space: nowrap;
-                opacity: 0;
-                transform: translate(-6px, -50%);
-                transition: opacity 0.25s 0.6s, transform 0.25s 0.6s;
-            }
-            .ar-hierarchy-slider.dragging .ar-hierarchy-label {
-                opacity: 1;
-                transform: translate(0, -50%);
-                transition: opacity 0.12s, transform 0.12s;
             }
         `;
         document.head.appendChild(style);
