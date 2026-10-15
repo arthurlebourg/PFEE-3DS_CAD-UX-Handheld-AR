@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /** Physical distance (metres) beyond which placement is blocked. */
-export const MAX_PLACEMENT_DISTANCE = 3.0;
+export const MAX_PLACEMENT_DISTANCE = 5.0;
 
 const COLOR_IN_RANGE  = 0x00e676; // green
 const COLOR_OUT_RANGE = 0xff3d00; // red-orange
