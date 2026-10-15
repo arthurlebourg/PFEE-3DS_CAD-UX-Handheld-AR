@@ -18,6 +18,7 @@ import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
 import { ModeHistoryManager } from './history/historyManager.js';
 import { TutorialEventBus } from './tutorial/tutorialEvents.js';
 import { TutorialManager } from './tutorial/tutorialManager.js';
+import { PlacementOverlay } from './ui/placementOverlay.js';
 import { HierarchySlider } from './ui/hierarchySlider.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
@@ -65,6 +66,7 @@ let shadowSystem: ShadowSystem;
 let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let tutorial: TutorialManager;
+let placementOverlay: PlacementOverlay;
 
 /**
  * The tutorial observes the app through this bus. Emitting is the app's only
@@ -122,6 +124,7 @@ function init(): void {
     xrRig.add(controller2);
 
     pickHelper = new PickHelper();
+    placementOverlay = new PlacementOverlay(scene);
     hierarchySlider = new HierarchySlider((node, level) => {
         pickHelper.selectNode(node);
         tutorialEvents.emit({ kind: 'granularity-changed', level });
@@ -151,6 +154,7 @@ function init(): void {
     );
 
     uiManager.attach(document.body);
+    placementOverlay.attach(document.body);
     historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
@@ -194,7 +198,7 @@ function init(): void {
             if (!spatialMappingOverlay.isComplete) {
                 return false;
             }
-            if (previewModel?.visible && loadedModel) {
+            if (previewModel?.visible && loadedModel && previewModel.userData.placementAllowed !== false) {                
                 placeModel();
                 tutorialEvents.emit({ kind: 'model-placed' });
                 return true;
@@ -269,8 +273,10 @@ function init(): void {
     modeManager = new ModeManager(editMode, inspectMode, (mode) => {
         uiManager.setMode(mode);
         historyManager.setMode(mode);
+        placementOverlay.setMode(mode);
         if (mode === 'inspect' && previewModel) {
             previewModel.visible = false;
+            placementOverlay.hideReticle();
         }
         tutorialEvents.emit({ kind: 'mode-changed', mode });
     });
@@ -307,12 +313,15 @@ function init(): void {
         renderer.xr.addEventListener('sessionstart', () => {
             uiManager.toggleVisibility(true);
             spatialMappingOverlay.start();
+            placementOverlay.setVisible(true);
+            placementOverlay.setMode(modeManager.currentName);
         });
         renderer.xr.addEventListener('sessionend', () => {
             uiManager.toggleVisibility(false);
             perf.setVisible(false);
             tutorial.stop();
             spatialMappingOverlay.hide();
+            placementOverlay.setVisible(false);
         });
     }
 
@@ -891,24 +900,32 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
             hasSurface = hitTestResults.length > 0;
 
+            const pose = hasSurface ? hitTestResults[0].getPose(referenceSpace) : undefined;
+            const posePosition = new THREE.Vector3();
+            const poseRotation = new THREE.Quaternion();
+            if (pose) {
+                const poseScale = new THREE.Vector3();
+                new THREE.Matrix4().fromArray(pose.transform.matrix).decompose(posePosition, poseRotation, poseScale);
+            }
+
             const placementArmed =
                 modeManager.currentName === 'edit' && editMode.isArmed;
-            if (hasSurface && placementArmed && spatialMappingOverlay.isComplete && previewModel) {
-                const hit = hitTestResults[0];
-                const pose = hit.getPose(referenceSpace);
-                if (pose) {
-                    previewModel.visible = true;
-                    
-                    const posePosition = new THREE.Vector3();
-                    const poseRotation = new THREE.Quaternion();
-                    const poseScale = new THREE.Vector3();
-                    const poseMatrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
-                    poseMatrix.decompose(posePosition, poseRotation, poseScale);
-                    
-                    // Store the physical pose coordinates
-                    previewModel.userData.physicalPosition = posePosition.clone();
-                    previewModel.userData.physicalRotation = poseRotation.clone();
+            if (pose && !spatialMappingOverlay.isComplete) {
+                // Still mapping: show where the surface is, but hold the ghost
+                // preview until the surface has stabilized.
+                placementOverlay.updateReticle(posePosition, poseRotation, rigScale, true);
+                if (previewModel) previewModel.visible = false;
+            } else if (pose && placementArmed && previewModel) {
+                const inRange = placementOverlay.updateReticle(posePosition, poseRotation, rigScale);
 
+                previewModel.userData.physicalPosition = posePosition.clone();
+                previewModel.userData.physicalRotation = poseRotation.clone();
+                previewModel.userData.placementAllowed = inRange;
+
+                // Show the ghost preview only when placement is valid.
+                previewModel.visible = inRange;
+
+                if (inRange) {
                     // Apply the rigScale to the position
                     previewModel.position.copy(posePosition).multiplyScalar(rigScale);
                     previewModel.quaternion.copy(poseRotation);
@@ -920,13 +937,14 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                     currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
                     previewModel.scale.copy(modelScale);
                 }
-            } else if (previewModel) {
-                previewModel.visible = false;
+            } else {
+                if (previewModel) previewModel.visible = false;
+                placementOverlay.hideReticle();
             }
         }
 
         if (referenceSpace && spatialMappingOverlay) {
-            spatialMappingOverlay.updateWebXR(frame, referenceSpace, hasSurface);
+            spatialMappingOverlay.updateWebXR(hasSurface);
         }
     }
     if (uiManager.showPickingColors) {
