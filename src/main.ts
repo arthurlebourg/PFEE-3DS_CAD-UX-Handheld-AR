@@ -896,49 +896,51 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
             hasSurface = hitTestResults.length > 0;
 
+            const pose = hasSurface ? hitTestResults[0].getPose(referenceSpace) : undefined;
+            const posePosition = new THREE.Vector3();
+            const poseRotation = new THREE.Quaternion();
+            if (pose) {
+                const poseScale = new THREE.Vector3();
+                new THREE.Matrix4().fromArray(pose.transform.matrix).decompose(posePosition, poseRotation, poseScale);
+            }
+
             const placementArmed =
                 modeManager.currentName === 'edit' && editMode.isArmed;
-            if (hasSurface && placementArmed && spatialMappingOverlay.isComplete && previewModel) {
-                const hit = hitTestResults[0];
-                const pose = hit.getPose(referenceSpace);
-                if (pose) {
-                    
-                    const posePosition = new THREE.Vector3();
-                    const poseRotation = new THREE.Quaternion();
-                    const poseScale = new THREE.Vector3();
-                    const poseMatrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
-                    poseMatrix.decompose(posePosition, poseRotation, poseScale);
+            if (pose && !spatialMappingOverlay.isComplete) {
+                // Still mapping: show where the surface is, but hold the ghost
+                // preview until the surface has stabilized.
+                placementOverlay.updateReticle(posePosition, poseRotation, rigScale, true);
+                if (previewModel) previewModel.visible = false;
+            } else if (pose && placementArmed && previewModel) {
+                const inRange = placementOverlay.updateReticle(posePosition, poseRotation, rigScale);
 
-                    const inRange = placementOverlay.updateReticle(posePosition, poseRotation, rigScale);
+                previewModel.userData.physicalPosition = posePosition.clone();
+                previewModel.userData.physicalRotation = poseRotation.clone();
+                previewModel.userData.placementAllowed = inRange;
 
-                    previewModel.userData.physicalPosition = posePosition.clone();
-                    previewModel.userData.physicalRotation = poseRotation.clone();
-                    previewModel.userData.placementAllowed = inRange;
+                // Show the ghost preview only when placement is valid.
+                previewModel.visible = inRange;
 
-                    // Show the ghost preview only when placement is valid.
-                    previewModel.visible = inRange;
+                if (inRange) {
+                    // Apply the rigScale to the position
+                    previewModel.position.copy(posePosition).multiplyScalar(rigScale);
+                    previewModel.quaternion.copy(poseRotation);
 
-                    if (inRange) {
-                        // Apply the rigScale to the position
-                        previewModel.position.copy(posePosition).multiplyScalar(rigScale);
-                        previewModel.quaternion.copy(poseRotation);
-
-                        // Set scale from currentScaleMatrix (auto-fit scale)
-                        const modelScale = new THREE.Vector3();
-                        const modelRot = new THREE.Quaternion();
-                        const modelPos = new THREE.Vector3();
-                        currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
-                        previewModel.scale.copy(modelScale);
-                    }
+                    // Set scale from currentScaleMatrix (auto-fit scale)
+                    const modelScale = new THREE.Vector3();
+                    const modelRot = new THREE.Quaternion();
+                    const modelPos = new THREE.Vector3();
+                    currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
+                    previewModel.scale.copy(modelScale);
                 }
-            } else if (previewModel) {
-                previewModel.visible = false;
+            } else {
+                if (previewModel) previewModel.visible = false;
                 placementOverlay.hideReticle();
             }
         }
 
         if (referenceSpace && spatialMappingOverlay) {
-            spatialMappingOverlay.updateWebXR(frame, referenceSpace, hasSurface);
+            spatialMappingOverlay.updateWebXR(hasSurface);
         }
     }
     if (uiManager.showPickingColors) {

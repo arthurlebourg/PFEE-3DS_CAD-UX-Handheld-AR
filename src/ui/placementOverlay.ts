@@ -5,6 +5,14 @@ export const MAX_PLACEMENT_DISTANCE = 5.0;
 
 const COLOR_IN_RANGE  = 0x00e676; // green
 const COLOR_OUT_RANGE = 0xff3d00; // red-orange
+const COLOR_PENDING   = 0xffffff; // surface seen, still stabilizing
+
+/** Duration of the pop played when the reticle locks onto a stable surface. */
+const LOCK_POP_MS = 300;
+/** Extra scale at the start of the lock pop. */
+const LOCK_POP_SCALE = 0.3;
+/** Pulse period of the pending reticle. */
+const PENDING_PULSE_MS = 900;
 
 
 export class PlacementOverlay {
@@ -12,6 +20,8 @@ export class PlacementOverlay {
     private reticle: THREE.Group;
     private ringMat: THREE.MeshBasicMaterial;
     private dotMat: THREE.MeshBasicMaterial;
+    private wasPending = false;
+    private lockStart = -Infinity;
 
     // ── DOM elements ─────────────────────────────────────────────────────────
     private modeEl: HTMLDivElement;
@@ -79,18 +89,43 @@ export class PlacementOverlay {
 
     /**
      * Updates reticle position and colour each frame.
+     * @param pending true while surface mapping is still stabilizing: the
+     *   reticle pulses in white, and pops when it then locks onto the surface.
      * @returns true when the position is within MAX_PLACEMENT_DISTANCE.
      */
     public updateReticle(
         posePosition: THREE.Vector3,
         poseRotation: THREE.Quaternion,
-        rigScale: number
+        rigScale: number,
+        pending = false
     ): boolean {
         this.reticle.visible = true;
         this.reticle.position.copy(posePosition).multiplyScalar(rigScale);
         this.reticle.quaternion.copy(poseRotation);
 
+        const now = performance.now();
+        if (this.wasPending && !pending) {
+            this.lockStart = now;
+        }
+        this.wasPending = pending;
+
         const inRange = posePosition.length() <= MAX_PLACEMENT_DISTANCE;
+        if (pending) {
+            const pulse = 0.5 + 0.5 * Math.sin((now / PENDING_PULSE_MS) * Math.PI * 2);
+            this.ringMat.color.setHex(COLOR_PENDING);
+            this.dotMat.color.setHex(COLOR_PENDING);
+            this.ringMat.opacity = 0.35 + 0.3 * pulse;
+            this.dotMat.opacity = 0.3;
+            this.reticle.scale.setScalar(0.9 + 0.05 * pulse);
+            this.distanceWarningEl.style.display = 'none';
+            return inRange;
+        }
+
+        const t = Math.min(1, (now - this.lockStart) / LOCK_POP_MS);
+        this.reticle.scale.setScalar(1 + LOCK_POP_SCALE * (1 - t) * (1 - t));
+        this.ringMat.opacity = 0.85;
+        this.dotMat.opacity = 0.6;
+
         const color = inRange ? COLOR_IN_RANGE : COLOR_OUT_RANGE;
         this.ringMat.color.setHex(color);
         this.dotMat.color.setHex(color);
@@ -101,6 +136,7 @@ export class PlacementOverlay {
     /** Hides the reticle and distance warning when no hit-test result is available. */
     public hideReticle(): void {
         this.reticle.visible = false;
+        this.wasPending = false;
         this.distanceWarningEl.style.display = 'none';
     }
 

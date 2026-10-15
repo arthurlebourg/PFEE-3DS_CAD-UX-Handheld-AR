@@ -1,9 +1,5 @@
 import type { Camera } from 'three';
 
-/** Share of the bar camera motion alone can fill; the rest requires a real surface. */
-const MOTION_CAP = 0.6;
-/** Progress per frame of camera motion, before any surface is seen (~2 s to the cap at 30 fps). */
-const MOTION_STEP = 0.01;
 /** Per-frame displacement (m) that counts as the user moving the device. */
 const MOTION_THRESHOLD = 0.002;
 /** Surface score needed to validate placement (~0.7 s of steady hits at 30 fps). */
@@ -12,32 +8,31 @@ const SURFACE_TARGET = 20;
 const SURFACE_DECAY = 0.5;
 /** Time without a surface in view before suggesting where to aim. */
 const HINT_DELAY_MS = 7000;
-/** Fraction of the gap the displayed bar closes each frame, so jumps animate. */
-const BAR_SMOOTHING = 0.25;
+/** Time without a surface before the coaching animation comes back, so hit-test flicker doesn't blink it. */
+const COACHING_RETURN_MS = 1500;
 
-const MSG_MOVE = 'Déplacez lentement la caméra pour cartographier la pièce';
-const MSG_STABILIZING = 'Surface détectée, stabilisation...';
+const MSG_MOVE = 'Déplacez lentement l\'appareil';
 const MSG_HINT = 'Pointez vers le sol ou une table bien éclairée';
-const MSG_DONE = 'Espace cartographié !';
 
 /**
- * SpatialMappingOverlay: onboarding overlay shown until a placement surface is found.
+ * SpatialMappingOverlay: lightweight coaching shown over the camera feed until a
+ * placement surface is found, in the style of Apple Measure.
  *
- * Camera motion fills the bar up to MOTION_CAP to reassure the user while tracking
- * warms up; the remainder only fills while the centre-screen hit test keeps finding
- * a surface, so completion guarantees there is somewhere to place a model.
+ * While nothing is detected, a small phone animation invites the user to move
+ * the device. As soon as the centre-screen hit test finds a surface the
+ * animation fades out and the reticle takes over; completion still requires the
+ * surface to stay detected, so there is always somewhere to place a model.
  */
 export class SpatialMappingOverlay {
     public isComplete = false;
 
     private root = document.createElement('div');
-    private barFill!: HTMLElement;
-    private subtitle!: HTMLElement;
-    private percentLabel!: HTMLElement;
-    private motionProgress = 0;
+    private coaching!: HTMLElement;
+    private label!: HTMLElement;
     private surfaceScore = 0;
-    private displayedProgress = 0;
+    private startTime = 0;
     private lastSurfaceTime = 0;
+    private surfaceEverSeen = false;
     private lastPos?: { x: number; y: number; z: number };
     private onComplete?: () => void;
 
@@ -53,14 +48,13 @@ export class SpatialMappingOverlay {
 
     public start(): void {
         this.isComplete = false;
-        this.motionProgress = 0;
         this.surfaceScore = 0;
-        this.displayedProgress = 0;
-        this.lastSurfaceTime = performance.now();
+        this.startTime = performance.now();
+        this.lastSurfaceTime = 0;
+        this.surfaceEverSeen = false;
         this.lastPos = undefined;
-        this.updateUI(0, MSG_MOVE);
-        this.barFill.classList.remove('complete');
-        this.root.classList.remove('fade-out');
+        this.label.textContent = MSG_MOVE;
+        this.coaching.classList.remove('hidden');
         this.root.style.display = 'flex';
     }
 
@@ -68,10 +62,9 @@ export class SpatialMappingOverlay {
         this.root.style.display = 'none';
     }
 
-    /** Feeds one WebXR frame: viewer motion plus whether the hit test found a surface. */
-    public updateWebXR(frame: XRFrame, refSpace: XRReferenceSpace, hasSurface: boolean): void {
-        const pose = frame.getViewerPose(refSpace);
-        this.update(pose ? this.hasMoved(pose.transform.position) : false, hasSurface);
+    /** Feeds one WebXR frame: whether the centre-screen hit test found a surface. */
+    public updateWebXR(hasSurface: boolean): void {
+        this.update(hasSurface);
     }
 
     /**
@@ -79,22 +72,18 @@ export class SpatialMappingOverlay {
      * the camera stands in for seeing a surface.
      */
     public updateDev(camera: Camera): void {
-        const moved = this.hasMoved(camera.position);
-        this.update(moved, moved);
+        this.update(this.hasMoved(camera.position));
     }
 
-    private update(moved: boolean, hasSurface: boolean): void {
+    private update(hasSurface: boolean): void {
         if (this.isComplete) return;
 
+        const now = performance.now();
         if (hasSurface) {
-            // A surface implies tracking is up: skip the rest of the motion phase.
-            this.motionProgress = MOTION_CAP;
+            this.surfaceEverSeen = true;
+            this.lastSurfaceTime = now;
             this.surfaceScore = Math.min(SURFACE_TARGET, this.surfaceScore + 1);
-            this.lastSurfaceTime = performance.now();
         } else {
-            if (moved) {
-                this.motionProgress = Math.min(MOTION_CAP, this.motionProgress + MOTION_STEP);
-            }
             this.surfaceScore = Math.max(0, this.surfaceScore - SURFACE_DECAY);
         }
 
@@ -103,29 +92,24 @@ export class SpatialMappingOverlay {
             return;
         }
 
-        const target = this.motionProgress + (1 - MOTION_CAP) * (this.surfaceScore / SURFACE_TARGET);
-        this.displayedProgress += (target - this.displayedProgress) * BAR_SMOOTHING;
+        const lastSeen = this.surfaceEverSeen ? this.lastSurfaceTime : this.startTime;
+        this.label.textContent = now - lastSeen > HINT_DELAY_MS ? MSG_HINT : MSG_MOVE;
+        this.coaching.classList.toggle('hidden', !this.coachingVisible());
+    }
 
-        let msg = MSG_MOVE;
-        if (this.surfaceScore > 0) {
-            msg = MSG_STABILIZING;
-        } else if (performance.now() - this.lastSurfaceTime > HINT_DELAY_MS) {
-            msg = MSG_HINT;
-        }
-        this.updateUI(this.displayedProgress, msg);
+    private coachingVisible(): boolean {
+        return !this.surfaceEverSeen || performance.now() - this.lastSurfaceTime > COACHING_RETURN_MS;
     }
 
     private complete(): void {
         if (this.isComplete) return;
         this.isComplete = true;
-        this.barFill.classList.add('complete');
-        this.updateUI(1, MSG_DONE);
+        this.coaching.classList.add('hidden');
         this.onComplete?.();
-
+        // Let the fade-out finish before taking the overlay out of the layout.
         setTimeout(() => {
-            this.root.classList.add('fade-out');
-            setTimeout(() => this.hide(), 400);
-        }, 700);
+            if (this.isComplete) this.hide();
+        }, 400);
     }
 
     private hasMoved(pos: { x: number; y: number; z: number }): boolean {
@@ -135,48 +119,24 @@ export class SpatialMappingOverlay {
         return moved;
     }
 
-    private updateUI(p: number, msg: string): void {
-        const pct = Math.round(p * 100);
-        this.barFill.style.width = `${pct}%`;
-        this.percentLabel.textContent = `${pct}%`;
-        this.subtitle.textContent = msg;
-    }
-
-
     private buildDOM(isDevMode: boolean): void {
         this.root.className = 'ar-scan-overlay';
         this.root.style.display = 'none';
         this.root.innerHTML = `
-            <div class="ar-scan-card">
-                <div class="ar-scan-graphic">
-                    <svg viewBox="0 0 120 100" class="scan-svg" fill="none">
-                        <ellipse cx="60" cy="80" rx="44" ry="14" stroke="rgba(56,189,248,0.35)" stroke-width="1.5" stroke-dasharray="3 3"/>
-                        <ellipse cx="60" cy="80" rx="26" ry="8" stroke="rgba(56,189,248,0.55)" stroke-width="1.5"/>
-                        <path d="M 34 80 A 26 8 0 0 1 86 80" class="radar-arc" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round"/>
-                        <g class="phone-wrapper">
-                            <rect x="46" y="16" width="28" height="48" rx="5" fill="rgba(15,23,42,0.95)" stroke="#38bdf8" stroke-width="2"/>
-                            <rect x="49" y="21" width="22" height="34" rx="2" fill="rgba(56,189,248,0.2)"/>
-                            <circle cx="60" cy="59" r="2" fill="rgba(255,255,255,0.6)"/>
-                            <polygon points="50,55 70,55 84,80 36,80" class="scan-beam" fill="url(#beamGrad)" opacity="0.45"/>
-                        </g>
-                        <defs>
-                            <linearGradient id="beamGrad" x1="60" y1="55" x2="60" y2="80" gradientUnits="userSpaceOnUse">
-                                <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8"/>
-                                <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.05"/>
-                            </linearGradient>
-                        </defs>
-                    </svg>
-                </div>
-                <h3 class="ar-scan-title">Cartographie de l'espace</h3>
-                <p class="ar-scan-sub"></p>
-                <div class="ar-scan-bar"><div class="ar-scan-fill"></div></div>
-                <div class="ar-scan-meta"><span>Scan en cours</span><span class="ar-scan-pct">0%</span></div>
-                ${isDevMode ? '<button class="ar-scan-skip">Passer (Dev)</button>' : ''}
+            <div class="ar-scan-coaching">
+                <svg viewBox="0 0 120 90" class="ar-scan-svg" fill="none">
+                    <ellipse cx="60" cy="74" rx="40" ry="10" stroke="rgba(255,255,255,0.45)" stroke-width="1.5" stroke-dasharray="3 4"/>
+                    <g class="ar-scan-phone">
+                        <rect x="46" y="10" width="28" height="48" rx="6" stroke="#fff" stroke-width="2.5"/>
+                        <line x1="56" y1="15" x2="64" y2="15" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+                    </g>
+                </svg>
+                <p class="ar-scan-label"></p>
             </div>
+            ${isDevMode ? '<button class="ar-scan-skip">Passer (Dev)</button>' : ''}
         `;
-        this.barFill = this.root.querySelector('.ar-scan-fill')!;
-        this.subtitle = this.root.querySelector('.ar-scan-sub')!;
-        this.percentLabel = this.root.querySelector('.ar-scan-pct')!;
+        this.coaching = this.root.querySelector('.ar-scan-coaching')!;
+        this.label = this.root.querySelector('.ar-scan-label')!;
 
         const skip = this.root.querySelector<HTMLButtonElement>('.ar-scan-skip');
         if (skip) skip.onclick = (e) => { e.stopPropagation(); this.complete(); };
@@ -189,24 +149,17 @@ export class SpatialMappingOverlay {
         const style = document.createElement('style');
         style.id = 'ar-scan-styles';
         style.textContent = `
-            .ar-scan-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 2000; transition: opacity 0.4s ease; }
-            .ar-scan-overlay.fade-out { opacity: 0; }
-            .ar-scan-card { width: 85%; max-width: 330px; padding: 22px 20px; background: rgba(15,15,24,0.88); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid rgba(255,255,255,0.18); border-radius: 20px; color: #fff; text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow: 0 16px 40px rgba(0,0,0,0.5); pointer-events: auto; }
-            .ar-scan-graphic { width: 120px; height: 90px; margin: 0 auto 8px; display: flex; align-items: center; justify-content: center; }
-            .scan-svg { width: 100%; height: 100%; overflow: visible; }
-            .phone-wrapper { transform-origin: 60px 80px; animation: scanSway 2.4s ease-in-out infinite alternate; }
-            @keyframes scanSway { 0% { transform: rotate(-18deg) translateX(-12px); } 50% { transform: rotate(0deg) translateX(0); } 100% { transform: rotate(18deg) translateX(12px); } }
-            .scan-beam { animation: beamPulse 1.2s ease-in-out infinite alternate; }
-            @keyframes beamPulse { from { opacity: 0.2; } to { opacity: 0.6; } }
-            .radar-arc { animation: radarSweep 2.4s ease-in-out infinite alternate; transform-origin: 60px 80px; }
-            @keyframes radarSweep { 0% { opacity: 0.3; transform: scaleX(0.7); } 100% { opacity: 1; transform: scaleX(1.1); } }
-            .ar-scan-title { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
-            .ar-scan-sub { margin: 0 0 16px; font-size: 13px; color: rgba(255,255,255,0.75); min-height: 36px; display: flex; align-items: center; justify-content: center; }
-            .ar-scan-bar { height: 8px; background: rgba(255,255,255,0.12); border-radius: 999px; overflow: hidden; margin-bottom: 10px; }
-            .ar-scan-fill { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, #38bdf8, #2563eb); transition: width 0.15s ease-out, background 0.3s; }
-            .ar-scan-fill.complete { background: #10b981; }
-            .ar-scan-meta { display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; color: #38bdf8; }
-            .ar-scan-skip { margin-top: 14px; padding: 6px 12px; font-size: 11px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; cursor: pointer; }
+            .ar-scan-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 2000; }
+            .ar-scan-coaching { display: flex; flex-direction: column; align-items: center; gap: 10px; transition: opacity 0.35s ease, transform 0.35s ease; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.55)); }
+            .ar-scan-coaching.hidden { opacity: 0; transform: scale(0.92); }
+            .ar-scan-svg { width: 96px; height: 72px; overflow: visible; }
+            .ar-scan-phone { transform-box: view-box; transform-origin: 60px 74px; animation: arScanSweep 2.4s ease-in-out infinite; }
+            @keyframes arScanSweep {
+                0%, 100% { transform: translateX(-18px) rotate(-10deg); }
+                50% { transform: translateX(18px) rotate(10deg); }
+            }
+            .ar-scan-label { margin: 0; max-width: 260px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px; font-weight: 600; color: #fff; text-align: center; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+            .ar-scan-skip { position: fixed; bottom: 16px; right: 16px; padding: 6px 12px; font-size: 11px; background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.3); border-radius: 6px; color: #fff; cursor: pointer; pointer-events: auto; }
         `;
         document.head.appendChild(style);
     }
