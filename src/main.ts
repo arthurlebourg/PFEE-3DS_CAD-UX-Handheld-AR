@@ -18,6 +18,7 @@ import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
 import { ModeHistoryManager } from './history/historyManager.js';
 import { TutorialEventBus } from './tutorial/tutorialEvents.js';
 import { TutorialManager } from './tutorial/tutorialManager.js';
+import { PlacementOverlay } from './ui/placementOverlay.js';
 import { HierarchySlider } from './ui/hierarchySlider.js';
 import { Occlusion } from './scene/occlusion.js';
 
@@ -67,6 +68,7 @@ let shadowSystem: ShadowSystem;
 let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let tutorial: TutorialManager;
+let placementOverlay: PlacementOverlay;
 
 /**
  * The tutorial observes the app through this bus. Emitting is the app's only
@@ -126,6 +128,7 @@ function init(): void {
     xrRig.add(controller2);
 
     pickHelper = new PickHelper();
+    placementOverlay = new PlacementOverlay(scene);
     hierarchySlider = new HierarchySlider((node, level) => {
         pickHelper.selectNode(node);
         tutorialEvents.emit({ kind: 'granularity-changed', level });
@@ -155,6 +158,7 @@ function init(): void {
     );
 
     uiManager.attach(document.body);
+    placementOverlay.attach(document.body);
     historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
@@ -198,7 +202,7 @@ function init(): void {
             if (!spatialMappingOverlay.isComplete) {
                 return false;
             }
-            if (previewModel?.visible && loadedModel) {
+            if (previewModel?.visible && loadedModel && previewModel.userData.placementAllowed !== false) {                
                 placeModel();
                 tutorialEvents.emit({ kind: 'model-placed' });
                 return true;
@@ -273,8 +277,10 @@ function init(): void {
     modeManager = new ModeManager(editMode, inspectMode, (mode) => {
         uiManager.setMode(mode);
         historyManager.setMode(mode);
+        placementOverlay.setMode(mode);
         if (mode === 'inspect' && previewModel) {
             previewModel.visible = false;
+            placementOverlay.hideReticle();
         }
         tutorialEvents.emit({ kind: 'mode-changed', mode });
     });
@@ -312,12 +318,15 @@ function init(): void {
         renderer.xr.addEventListener('sessionstart', () => {
             uiManager.toggleVisibility(true);
             spatialMappingOverlay.start();
+            placementOverlay.setVisible(true);
+            placementOverlay.setMode(modeManager.currentName);
         });
         renderer.xr.addEventListener('sessionend', () => {
             uiManager.toggleVisibility(false);
             perf.setVisible(false);
             tutorial.stop();
             spatialMappingOverlay.hide();
+            placementOverlay.setVisible(false);
         });
     }
 
@@ -893,31 +902,38 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
-                    previewModel.visible = true;
                     
                     const posePosition = new THREE.Vector3();
                     const poseRotation = new THREE.Quaternion();
                     const poseScale = new THREE.Vector3();
                     const poseMatrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
                     poseMatrix.decompose(posePosition, poseRotation, poseScale);
-                    
-                    // Store the physical pose coordinates
+
+                    const inRange = placementOverlay.updateReticle(posePosition, poseRotation, rigScale);
+
                     previewModel.userData.physicalPosition = posePosition.clone();
                     previewModel.userData.physicalRotation = poseRotation.clone();
+                    previewModel.userData.placementAllowed = inRange;
 
-                    // Apply the rigScale to the position
-                    previewModel.position.copy(posePosition).multiplyScalar(rigScale);
-                    previewModel.quaternion.copy(poseRotation);
+                    // Show the ghost preview only when placement is valid.
+                    previewModel.visible = inRange;
 
-                    // Set scale from currentScaleMatrix (auto-fit scale)
-                    const modelScale = new THREE.Vector3();
-                    const modelRot = new THREE.Quaternion();
-                    const modelPos = new THREE.Vector3();
-                    currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
-                    previewModel.scale.copy(modelScale);
+                    if (inRange) {
+                        // Apply the rigScale to the position
+                        previewModel.position.copy(posePosition).multiplyScalar(rigScale);
+                        previewModel.quaternion.copy(poseRotation);
+
+                        // Set scale from currentScaleMatrix (auto-fit scale)
+                        const modelScale = new THREE.Vector3();
+                        const modelRot = new THREE.Quaternion();
+                        const modelPos = new THREE.Vector3();
+                        currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
+                        previewModel.scale.copy(modelScale);
+                    }
                 }
             } else if (previewModel) {
                 previewModel.visible = false;
+                placementOverlay.hideReticle();
             }
         }
 
