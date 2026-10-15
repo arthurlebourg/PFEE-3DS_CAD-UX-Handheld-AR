@@ -49,8 +49,17 @@ const MIN_ROTATION_RAD = (20 * Math.PI) / 180;
 const MIN_EXPLODE_DELTA = 0.3;
 
 /**
- * The eight gestures, in the only order the app allows: nothing can be scaled,
- * rotated or inspected before a model exists in the scene.
+ * Continuous gestures complete when the fingers lift, not when the threshold
+ * is crossed: the user is still adjusting, and swapping the card under their
+ * fingers (or showing the finish screen) cuts the gesture short.
+ */
+const isRelease = (event: TutorialEvent): boolean =>
+    event.kind === 'gesture' && event.gesture === 'release';
+
+/**
+ * The nine gestures, in the only order the app allows: nothing can be scaled,
+ * rotated or inspected before a model exists in the scene, and the granularity
+ * rail only exists once a piece is picked.
  *
  * Only step 5 dims the scene. Dimming passthrough while asking someone to aim
  * at a real table is actively hostile, so gesture steps get a ring and no scrim.
@@ -73,7 +82,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         body: 'Pincez à deux doigts pour agrandir ou réduire la scène entière.',
         glyph: 'pinch',
         hint: "Posez deux doigts sur l'écran, puis écartez-les franchement.",
-        isComplete: (_event, progress) => progress.scaleSpread >= MIN_SCALE_SPREAD,
+        isComplete: (event, progress) => isRelease(event) && progress.scaleSpread >= MIN_SCALE_SPREAD,
     },
     {
         id: 'rotate',
@@ -82,7 +91,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         body: 'Maintenez un doigt appuyé une seconde : un joystick apparaît. Glissez ensuite vers la gauche ou la droite.',
         glyph: 'hold-drag',
         hint: 'Gardez le doigt immobile une seconde complète, sans le lever, puis glissez horizontalement.',
-        isComplete: (_event, progress) => progress.rotationRad >= MIN_ROTATION_RAD,
+        isComplete: (event, progress) => isRelease(event) && progress.rotationRad >= MIN_ROTATION_RAD,
     },
     {
         id: 'select',
@@ -113,6 +122,15 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         isComplete: (event) => event.kind === 'part-picked',
     },
     {
+        id: 'granularity',
+        mode: 'inspect',
+        title: 'Élargir la sélection',
+        body: "Une pièce sélectionnée fait apparaître un rail au bord gauche. Glissez le curseur vers le haut : la sélection s'étend à l'ensemble qui contient la pièce.",
+        glyph: 'slide-y',
+        hint: 'Posez le doigt sur le rail, tout à gauche de l\'écran, puis glissez vers le haut.',
+        isComplete: (event) => event.kind === 'granularity-changed' && event.level > 0,
+    },
+    {
         id: 'hide-part',
         mode: 'inspect',
         title: 'Masquer une pièce',
@@ -128,6 +146,6 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         body: "Pincez à deux doigts : le même geste qu'en Édition, mais ici il écarte les pièces les unes des autres.",
         glyph: 'pinch',
         hint: 'Écartez les deux doigts progressivement pour doser l\'éclatement.',
-        isComplete: (_event, progress) => progress.explodeDelta >= MIN_EXPLODE_DELTA,
+        isComplete: (event, progress) => isRelease(event) && progress.explodeDelta >= MIN_EXPLODE_DELTA,
     },
 ];
