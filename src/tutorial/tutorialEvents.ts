@@ -15,12 +15,15 @@ export type TutorialEvent =
     | { kind: 'model-selected'; selected: boolean }
     | { kind: 'mode-changed'; mode: ModeName }
     | { kind: 'part-picked' }
+    /** Granularity slider moved; level 0 is the picked piece, higher widens. */
+    | { kind: 'granularity-changed'; level: number }
     | { kind: 'part-hidden' }
     | { kind: 'explode-changed'; factor: number }
     /**
      * What the fingers did, regardless of what it achieved. Never completes a
-     * step — a 2 px pinch is not a lesson learned — it only lets the overlay
-     * tell "did nothing" from "started the gesture and stopped halfway".
+     * step on its own — a 2 px pinch is not a lesson learned. 'release' lets
+     * the threshold steps wait for the fingers to lift before moving on, so
+     * the next card never lands mid-gesture.
      */
     | { kind: 'gesture'; gesture: GestureKind };
 
