@@ -39,6 +39,11 @@ const CHEATSHEET: Record<ModeName, CheatItem[]> = {
     ],
     inspect: [
         { glyph: 'tap', gesture: 'Toucher', effect: 'Sélectionner une pièce du modèle.' },
+        {
+            glyph: 'slide-y',
+            gesture: 'Glisser sur le rail gauche',
+            effect: 'Élargir la sélection à l’ensemble qui contient la pièce.',
+        },
         { glyph: 'double-tap', gesture: 'Double-toucher', effect: 'Masquer la pièce visée.' },
         {
             glyph: 'pinch',

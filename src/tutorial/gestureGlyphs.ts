@@ -10,7 +10,7 @@
  * the frame budget.
  */
 
-export type GlyphName = 'tap' | 'double-tap' | 'hold-drag' | 'pinch' | 'ui-tap' | 'check';
+export type GlyphName = 'tap' | 'double-tap' | 'hold-drag' | 'pinch' | 'slide-y' | 'ui-tap' | 'check';
 
 /** Inline SVG markup for a glyph, inheriting the card's accent via currentColor. */
 export function glyphSvg(name: GlyphName): string {
@@ -41,6 +41,17 @@ export function glyphSvg(name: GlyphName): string {
             return `<svg class="ar-tg" viewBox="0 0 64 64" aria-hidden="true">
                 <circle class="ar-tg-pinch a" cx="25" cy="25" r="7"/>
                 <circle class="ar-tg-pinch b" cx="39" cy="39" r="7"/>
+            </svg>`;
+
+        case 'slide-y':
+            return `<svg class="ar-tg" viewBox="0 0 64 64" aria-hidden="true">
+                <path class="ar-tg-rail" d="M32 14v36"/>
+                <circle class="ar-tg-notch" cx="32" cy="14" r="2.5"/>
+                <circle class="ar-tg-notch" cx="32" cy="32" r="2.5"/>
+                <circle class="ar-tg-notch" cx="32" cy="50" r="2.5"/>
+                <g class="ar-tg-slide-y">
+                    <circle class="ar-tg-dot" cx="32" cy="50" r="7"/>
+                </g>
             </svg>`;
 
         case 'ui-tap':
@@ -111,6 +122,25 @@ export const GLYPH_STYLES = `
         32%  { stroke-dashoffset: 0; opacity: 0.5; }
         88%  { stroke-dashoffset: 0; opacity: 0.5; }
         100% { stroke-dashoffset: 0; opacity: 0; }
+    }
+
+    /* Granularity: the thumb climbs the rail, notch by notch. */
+    .ar-tg-rail {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 3;
+        stroke-linecap: round;
+        opacity: 0.3;
+    }
+
+    .ar-tg-notch { fill: currentColor; opacity: 0.45; }
+
+    .ar-tg-slide-y { animation: ar-tg-slide-y 2.8s ease-in-out infinite; }
+
+    @keyframes ar-tg-slide-y {
+        0%, 10%   { transform: translateY(0); }
+        45%, 70%  { transform: translateY(-36px); }
+        100%      { transform: translateY(0); }
     }
 
     .ar-tg-slide { animation: ar-tg-slide 2.8s ease-in-out infinite; }

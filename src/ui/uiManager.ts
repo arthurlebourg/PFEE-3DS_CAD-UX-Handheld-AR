@@ -332,6 +332,7 @@ export class UIManager {
         element.addEventListener('pointerdown', (event) => {
             event.stopPropagation();
             event.preventDefault();
+
             callback();
         });
     }

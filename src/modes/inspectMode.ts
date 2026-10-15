@@ -10,6 +10,10 @@ interface InspectModeDeps {
     pickMesh(inputSource?: XRInputSource): THREE.Mesh | null;
     /** Drives the exploded view; 0 = assembled. */
     onExplode(factor: number): void;
+    /** Opens the granularity slider on a freshly picked piece's ancestor chain. */
+    showGranularity(chain: THREE.Object3D[]): void;
+    /** Closes the granularity slider: nothing is selected any more. */
+    hideGranularity(): void;
     /** Pushes an undoable action to the inspect history stack. */
     onAction?: (action: HistoryAction) => void;
     /** Observation hook: a piece was picked (drives the tutorial). */
@@ -24,7 +28,8 @@ const MAX_EXPLODE_FACTOR = 1.5;
 /**
  * InspectMode: analyze a model without touching the scene layout.
  *
- * - Tap picks a piece.
+ * - Tap picks a piece, and opens the granularity slider on its ancestor
+ *   chain so the selection can be widened to a whole sub-assembly.
  * - Double tap hides the piece under the finger.
  * - Two-finger pinch drives the exploded view.
  */
@@ -59,17 +64,29 @@ export class InspectMode implements InteractionMode {
 
     public enter(): void {}
 
-    public exit(): void {}
+    public exit(): void {
+        this.deps.hideGranularity();
+    }
 
     public onTap(inputSource?: XRInputSource): void {
         const { pickHelper } = this.deps;
         const pickedMesh = this.deps.pickMesh(inputSource);
 
         if (pickedMesh) {
+            const isNewSelection = !pickHelper.selectedMeshes.includes(pickedMesh);
             pickHelper.handleMeshSelection(pickedMesh);
+            if (isNewSelection) {
+                this.deps.showGranularity(pickHelper.getSelectableAncestorChain(pickedMesh));
+            }
             this.deps.onPartPicked?.();
         } else if (pickHelper.selectedMeshes.length > 0) {
             pickHelper.clearSelection();
+        }
+
+        // Re-tapping a selected piece deselects it, so the slider follows the
+        // selection rather than the tap.
+        if (pickHelper.selectedMeshes.length === 0) {
+            this.deps.hideGranularity();
         }
     }
 
