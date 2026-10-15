@@ -9,7 +9,6 @@ import { PerfProbe } from './ui/perf.js';
 import { JoystickWidget } from './ui/joystickWidget.js';
 import { PickHelper } from './scene/picking.js';
 import { SceneRotator } from './scene/sceneRotator.js';
-import { ShadowSystem } from './scene/shadowSystem.js';
 import { GestureRecognizer } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
 import { EditMode } from './modes/editMode.js';
@@ -18,11 +17,8 @@ import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
 import { ModeHistoryManager } from './history/historyManager.js';
 import { TutorialEventBus } from './tutorial/tutorialEvents.js';
 import { TutorialManager } from './tutorial/tutorialManager.js';
-import { PlacementOverlay } from './ui/placementOverlay.js';
-import { HierarchySlider } from './ui/hierarchySlider.js';
-import { Occlusion } from './scene/occlusion.js';
 
-const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' });
 const modelUrls: Record<string, string> = {};
 for (const path in modules) {
     const filename = path.split('/').pop()!;
@@ -60,15 +56,11 @@ let devTick: (() => void) | null = null;
 let uiManager: UIManager;
 let sceneRotator: SceneRotator;
 let pickHelper: PickHelper;
-let hierarchySlider: HierarchySlider;
 let perf: PerfProbe;
-let occlusion: Occlusion;
-let shadowSystem: ShadowSystem;
 
 let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let tutorial: TutorialManager;
-let placementOverlay: PlacementOverlay;
 
 /**
  * The tutorial observes the app through this bus. Emitting is the app's only
@@ -113,12 +105,8 @@ function init(): void {
     renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
 
-    shadowSystem = new ShadowSystem(scene, renderer);
-
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-
-    occlusion = new Occlusion(scene, renderer);
 
     controller1 = renderer.xr.getController(0);
     controller1.addEventListener('select', (event) => { onSelect(event.data); });
@@ -128,12 +116,6 @@ function init(): void {
     xrRig.add(controller2);
 
     pickHelper = new PickHelper();
-    placementOverlay = new PlacementOverlay(scene);
-    hierarchySlider = new HierarchySlider((node, level) => {
-        pickHelper.selectNode(node);
-        tutorialEvents.emit({ kind: 'granularity-changed', level });
-    });
-    hierarchySlider.attach(document.body);
     perf = new PerfProbe({ visible: false });
     perf.mount(document.body);
 
@@ -158,7 +140,6 @@ function init(): void {
     );
 
     uiManager.attach(document.body);
-    placementOverlay.attach(document.body);
     historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
@@ -202,7 +183,7 @@ function init(): void {
             if (!spatialMappingOverlay.isComplete) {
                 return false;
             }
-            if (previewModel?.visible && loadedModel && previewModel.userData.placementAllowed !== false) {                
+            if (previewModel?.visible && loadedModel) {
                 placeModel();
                 tutorialEvents.emit({ kind: 'model-placed' });
                 return true;
@@ -257,12 +238,6 @@ function init(): void {
             explode(factor);
             tutorialEvents.emit({ kind: 'explode-changed', factor });
         },
-        showGranularity: (chain) => {
-            hierarchySlider.setHierarchy(chain);
-        },
-        hideGranularity: () => {
-            hierarchySlider.hide();
-        },
         onPartPicked: () => {
             tutorialEvents.emit({ kind: 'part-picked' });
         },
@@ -277,10 +252,8 @@ function init(): void {
     modeManager = new ModeManager(editMode, inspectMode, (mode) => {
         uiManager.setMode(mode);
         historyManager.setMode(mode);
-        placementOverlay.setMode(mode);
         if (mode === 'inspect' && previewModel) {
             previewModel.visible = false;
-            placementOverlay.hideReticle();
         }
         tutorialEvents.emit({ kind: 'mode-changed', mode });
     });
@@ -309,24 +282,20 @@ function init(): void {
     } else {
         const arButtonOptions = {
             requiredFeatures: ['hit-test'],
-            optionalFeatures: ['dom-overlay', 'depth-sensing'],
-            domOverlay: { root: document.body },
-            depthSensing: Occlusion.sessionInit,
+            optionalFeatures: ['dom-overlay'],
+            domOverlay: { root: document.body }
         };
         document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
 
         renderer.xr.addEventListener('sessionstart', () => {
             uiManager.toggleVisibility(true);
             spatialMappingOverlay.start();
-            placementOverlay.setVisible(true);
-            placementOverlay.setMode(modeManager.currentName);
         });
         renderer.xr.addEventListener('sessionend', () => {
             uiManager.toggleVisibility(false);
             perf.setVisible(false);
             tutorial.stop();
             spatialMappingOverlay.hide();
-            placementOverlay.setVisible(false);
         });
     }
 
@@ -381,7 +350,6 @@ function loadModel(modelName: string): void {
             // No AR hit-testing in dev mode: drop the model on the orbit target
             // so it is immediately visible and pickable.
             if (devModel) {
-                shadowSystem.unregisterModel(devModel);
                 scene.remove(devModel);
                 pickHelper.removeModel(devModel);
             }
@@ -397,13 +365,6 @@ function loadModel(modelName: string): void {
 
             scene.add(devModel);
             pickHelper.registerModel(devModel);
-
-            // Desktop dev mode has no WebXR hit-test. Use the horizontal grid
-            // at y = 0 as the physical support surface so shadows are testable.
-            shadowSystem.registerModel(devModel, {
-                position: new THREE.Vector3(devModel.position.x, 0, devModel.position.z),
-                quaternion: new THREE.Quaternion(),
-            });
         } else {
             // Selecting a model in the carousel arms placement: the next tap
             // in Edit mode will place it once mapping is complete.
@@ -441,10 +402,6 @@ function updateRigScale(newScale: number): void {
         const { physicalPosition } = model.userData as PhysicalPose;
         if (physicalPosition) {
             model.position.copy(physicalPosition).multiplyScalar(rigScale);
-            shadowSystem.updateSurface(model, {
-                position: model.position,
-                quaternion: model.quaternion,
-            });
         }
     }
 
@@ -460,10 +417,6 @@ function updateRigScale(newScale: number): void {
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
         pickHelper.clearSelection();
-        if (pickHelper) {
-        pickHelper.clearSelection();
-        hierarchySlider.hide();
-    }
     }
 }
 
@@ -488,14 +441,6 @@ function placeModel(): void {
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
-
-    // The model root already carries the hit-test pose, so the invisible
-    // receiver is aligned with the exact real surface used for placement.
-    shadowSystem.registerModel(model, {
-        position: model.position,
-        quaternion: model.quaternion,
-    });
-
     sceneRotator.refresh(xrRig, placedModels);
 
     historyManager.push('edit', {
@@ -551,7 +496,6 @@ function deleteSelectedModel(): void {
     pickHelper.clearSelection();
 
     pickHelper.removeModel(model);
-    shadowSystem.unregisterModel(model);
     scene.remove(model);
 
     if (index !== -1) {
@@ -644,18 +588,6 @@ function doResetModel(model: THREE.Object3D): void {
     }
     if (model.userData.originalModelScale) {
         model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
-    }
-
-    if (model === devModel) {
-        shadowSystem.updateSurface(model, {
-            position: new THREE.Vector3(model.position.x, 0, model.position.z),
-            quaternion: new THREE.Quaternion(),
-        });
-    } else {
-        shadowSystem.updateSurface(model, {
-            position: model.position,
-            quaternion: model.quaternion,
-        });
     }
 
     sceneRotator.refresh(xrRig, placedModels);
@@ -868,7 +800,6 @@ function onWindowResize(): void {
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
     devTick?.();
-    occlusion.update(frame);
 
     if (isDevMode && spatialMappingOverlay) {
         spatialMappingOverlay.updateDev(camera);
@@ -896,32 +827,24 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
             hasSurface = hitTestResults.length > 0;
 
-            const pose = hasSurface ? hitTestResults[0].getPose(referenceSpace) : undefined;
-            const posePosition = new THREE.Vector3();
-            const poseRotation = new THREE.Quaternion();
-            if (pose) {
-                const poseScale = new THREE.Vector3();
-                new THREE.Matrix4().fromArray(pose.transform.matrix).decompose(posePosition, poseRotation, poseScale);
-            }
-
             const placementArmed =
                 modeManager.currentName === 'edit' && editMode.isArmed;
-            if (pose && !spatialMappingOverlay.isComplete) {
-                // Still mapping: show where the surface is, but hold the ghost
-                // preview until the surface has stabilized.
-                placementOverlay.updateReticle(posePosition, poseRotation, rigScale, true);
-                if (previewModel) previewModel.visible = false;
-            } else if (pose && placementArmed && previewModel) {
-                const inRange = placementOverlay.updateReticle(posePosition, poseRotation, rigScale);
+            if (hasSurface && placementArmed && spatialMappingOverlay.isComplete && previewModel) {
+                const hit = hitTestResults[0];
+                const pose = hit.getPose(referenceSpace);
+                if (pose) {
+                    previewModel.visible = true;
+                    
+                    const posePosition = new THREE.Vector3();
+                    const poseRotation = new THREE.Quaternion();
+                    const poseScale = new THREE.Vector3();
+                    const poseMatrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+                    poseMatrix.decompose(posePosition, poseRotation, poseScale);
+                    
+                    // Store the physical pose coordinates
+                    previewModel.userData.physicalPosition = posePosition.clone();
+                    previewModel.userData.physicalRotation = poseRotation.clone();
 
-                previewModel.userData.physicalPosition = posePosition.clone();
-                previewModel.userData.physicalRotation = poseRotation.clone();
-                previewModel.userData.placementAllowed = inRange;
-
-                // Show the ghost preview only when placement is valid.
-                previewModel.visible = inRange;
-
-                if (inRange) {
                     // Apply the rigScale to the position
                     previewModel.position.copy(posePosition).multiplyScalar(rigScale);
                     previewModel.quaternion.copy(poseRotation);
@@ -933,14 +856,13 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                     currentScaleMatrix.decompose(modelPos, modelRot, modelScale);
                     previewModel.scale.copy(modelScale);
                 }
-            } else {
-                if (previewModel) previewModel.visible = false;
-                placementOverlay.hideReticle();
+            } else if (previewModel) {
+                previewModel.visible = false;
             }
         }
 
         if (referenceSpace && spatialMappingOverlay) {
-            spatialMappingOverlay.updateWebXR(hasSurface);
+            spatialMappingOverlay.updateWebXR(frame, referenceSpace, hasSurface);
         }
     }
     if (uiManager.showPickingColors) {

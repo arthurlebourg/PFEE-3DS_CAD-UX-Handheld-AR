@@ -25,7 +25,6 @@ export class PickHelper {
     private idToMeshMap = new Map<number, THREE.Mesh>();
     private nextId = 1;
     private readonly EM_KEY = 'originalEmissive';
-    private registeredRoots = new Set<THREE.Object3D>();
 
     private pickCamera = new THREE.PerspectiveCamera();
 
@@ -57,7 +56,6 @@ export class PickHelper {
      * camera will render it.
      */
     public registerModel(model: THREE.Object3D): void {
-        this.registeredRoots.add(model);
         model.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) {
                 return;
@@ -94,7 +92,6 @@ export class PickHelper {
      * selection state, and disposes the cached pick material.
      */
     public removeModel(model: THREE.Object3D): void {
-        this.registeredRoots.delete(model);
         model.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) {
                 return;
@@ -332,37 +329,7 @@ export class PickHelper {
         this.selectedMeshes = nextSelected;
     }
 
-    public getSelectableAncestorChain(mesh: THREE.Mesh): THREE.Object3D[] {
-        const chain: THREE.Object3D[] = [mesh];
-        let current: THREE.Object3D | null = mesh.parent;
 
-        while (current && !this.registeredRoots.has(current)) {
-            if (current.name) {
-                chain.push(current);
-            }
-            current = current.parent;
-        }
-
-        return chain;
-    }
-
-    public selectNode(node: THREE.Object3D): void {
-        const meshes: THREE.Mesh[] = [];
-        node.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                meshes.push(child);
-            }
-        });
-        if (meshes.length === 0) return;
-
-        for (const mesh of this.selectedMeshes) {
-            this.removeHighlight(mesh);
-        }
-        this.selectedMeshes = meshes;
-        for (const mesh of meshes) {
-            this.highlightMesh(mesh);
-        }
-    }
 
     /**
      * Visually highlights a mesh by setting its emissive color (bright orange
