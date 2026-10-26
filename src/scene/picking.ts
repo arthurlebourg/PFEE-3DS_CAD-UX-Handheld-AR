@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { PerfProbe } from '../ui/perf.js';
+import { assemblySteps, indexAssembly, pieceMeshes, pieceOf, stepMeshes } from './assemblyTree.js';
+import type { AssemblyStep } from './assemblyTree.js';
 
 
 
@@ -7,6 +9,15 @@ type MaterialBackup = { mesh: THREE.Mesh; material: THREE.Material | THREE.Mater
 
 /** Layer the pick camera renders in isolation, so only pickable meshes hit the id buffer. */
 const PICK_LAYER = 1;
+
+/**
+ * Opacity of a model's other pieces while the slider widens the selection to a
+ * sub-assembly: almost invisible, just enough to keep the outline in context.
+ */
+const DIM_OPACITY = 0.06;
+
+/** A material's state before dimming, restored as is. */
+type DimBackup = { transparent: boolean; opacity: number; depthWrite: boolean };
 
 /**
  * PickHelper: GPU colour picking via in-place material swapping.
@@ -26,6 +37,15 @@ export class PickHelper {
     private nextId = 1;
     private readonly EM_KEY = 'originalEmissive';
     private registeredRoots = new Set<THREE.Object3D>();
+    /**
+     * Assembly id -> node, per registered model: built once at registration so
+     * a tap only walks ids. Weak, so a model dropped by any path is not retained.
+     */
+    private assemblyIndexes = new WeakMap<THREE.Object3D, Map<number, THREE.Object3D>>();
+    /** The granularity step the selection currently is, if any. */
+    private activeStep: AssemblyStep | null = null;
+    /** Meshes currently faded around a sub-assembly selection (see updateContextDimming). */
+    private dimmedMeshes = new Set<THREE.Mesh>();
 
     private pickCamera = new THREE.PerspectiveCamera();
 
@@ -58,6 +78,7 @@ export class PickHelper {
      */
     public registerModel(model: THREE.Object3D): void {
         this.registeredRoots.add(model);
+        this.assemblyIndexes.set(model, indexAssembly(model));
         model.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) {
                 return;
@@ -95,6 +116,10 @@ export class PickHelper {
      */
     public removeModel(model: THREE.Object3D): void {
         this.registeredRoots.delete(model);
+        this.assemblyIndexes.delete(model);
+        if (this.activeStep && this.rootOf(this.activeStep.node) === model) {
+            this.activeStep = null;
+        }
         model.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) {
                 return;
@@ -112,6 +137,8 @@ export class PickHelper {
             delete child.userData.originalQuaternion;
             delete child.userData.originalScale;
         });
+        // Restores the model's faded pieces too, so an undo never brings it back dimmed.
+        this.updateContextDimming();
     }
 
 
@@ -235,14 +262,31 @@ export class PickHelper {
         }
     }
 
+    /**
+     * Toggles the tapped piece as a whole: all of its primitives, not just the
+     * one hit. Re-tapping a piece inside a widened (sub-assembly) selection
+     * drops that whole selection, as re-tapping a selected piece drops it.
+     */
     public handleMeshSelection(pickedMesh: THREE.Mesh) {
-        const isAlreadySelected = this.selectedMeshes.includes(pickedMesh);
+        const piece = pieceOf(pickedMesh);
+        const meshes = piece ? pieceMeshes(piece) : [pickedMesh];
+        const isAlreadySelected = meshes.every((mesh) => this.selectedMeshes.includes(mesh));
 
         if (isAlreadySelected) {
-            this.deselectMesh(pickedMesh);
+            if (this.activeStep?.scope === 'subtree') {
+                this.clearSelection();
+                return;
+            }
+            for (const mesh of meshes) {
+                this.deselectMesh(mesh);
+            }
         } else {
-            this.selectedMeshes.push(pickedMesh);
-            this.highlightMesh(pickedMesh);
+            for (const mesh of meshes) {
+                if (this.selectedMeshes.includes(mesh)) continue;
+                this.selectedMeshes.push(mesh);
+                this.highlightMesh(mesh);
+            }
+            this.updateContextDimming();
         }
     }
 
@@ -280,7 +324,7 @@ export class PickHelper {
 
         this.removeHighlight(mesh);
         this.selectedMeshes = this.selectedMeshes.filter((m) => m !== mesh);
-
+        this.updateContextDimming();
     }
 
     /**
@@ -291,6 +335,8 @@ export class PickHelper {
             this.removeHighlight(mesh);
         }
         this.selectedMeshes = [];
+        this.activeStep = null;
+        this.updateContextDimming();
     }
 
     /**
@@ -330,29 +376,26 @@ export class PickHelper {
         }
 
         this.selectedMeshes = nextSelected;
+        // An arbitrary set now, no longer a granularity step.
+        this.activeStep = null;
+        this.updateContextDimming();
     }
 
-    public getSelectableAncestorChain(mesh: THREE.Mesh): THREE.Object3D[] {
-        const chain: THREE.Object3D[] = [mesh];
-        let current: THREE.Object3D | null = mesh.parent;
-
-        while (current && !this.registeredRoots.has(current)) {
-            if (current.name) {
-                chain.push(current);
-            }
-            current = current.parent;
-        }
-
-        return chain;
+    /**
+     * Granularity steps for a picked mesh, bottom (its piece) to top (the whole
+     * model), from the assembly tree computed at load (see assemblyTree.ts).
+     */
+    public getSelectableAncestorChain(mesh: THREE.Mesh): AssemblyStep[] {
+        const root = this.rootOf(mesh);
+        const index = root ? this.assemblyIndexes.get(root) : undefined;
+        const steps = index ? assemblySteps(mesh, index) : [];
+        // A model loaded without a tree still gets its piece as a single step.
+        return steps.length > 0 ? steps : [{ node: mesh, scope: 'piece', pieces: 1 }];
     }
 
-    public selectNode(node: THREE.Object3D): void {
-        const meshes: THREE.Mesh[] = [];
-        node.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                meshes.push(child);
-            }
-        });
+    /** Replaces the selection with a granularity step. */
+    public selectNode(step: AssemblyStep): void {
+        const meshes = stepMeshes(step);
         if (meshes.length === 0) return;
 
         for (const mesh of this.selectedMeshes) {
@@ -362,6 +405,108 @@ export class PickHelper {
         for (const mesh of meshes) {
             this.highlightMesh(mesh);
         }
+        this.activeStep = step;
+        this.updateContextDimming();
+    }
+
+    /**
+     * Ends the sub-assembly context when the slider closes (leaving Inspect
+     * mode, or the selection emptied): the selection stays, unfaded, and no
+     * longer counts as a granularity step.
+     */
+    public clearContextDimming(): void {
+        this.activeStep = null;
+        this.updateContextDimming();
+    }
+
+    /**
+     * Fades a model's other pieces while the slider has widened the selection
+     * to a sub-assembly (a 'subtree' step), so what the level covers reads at a
+     * glance; the piece level and plain taps leave the scene as is. Only the
+     * model holding the selection is touched. Runs on selection changes, never
+     * per frame.
+     */
+    private updateContextDimming(): void {
+        const next = new Set<THREE.Mesh>();
+        const step = this.activeStep;
+        const root = step?.scope === 'subtree' ? this.rootOf(step.node) : null;
+        if (root) {
+            const selected = new Set(this.selectedMeshes);
+            root.traverse((child) => {
+                if (!(child instanceof THREE.Mesh)) return;
+                const mesh = child as THREE.Mesh;
+                if (!selected.has(mesh)) next.add(mesh);
+            });
+        }
+
+        for (const mesh of this.dimmedMeshes) {
+            if (!next.has(mesh)) this.undimMesh(mesh);
+        }
+        for (const mesh of next) {
+            if (!this.dimmedMeshes.has(mesh)) this.dimMesh(mesh);
+        }
+        this.dimmedMeshes = next;
+    }
+
+    /**
+     * Near invisible without depth writes, so the opaque selection stays
+     * visible through the pieces in front of it; no shadow either, which an
+     * all but invisible piece would otherwise still cast.
+     */
+    private dimMesh(mesh: THREE.Mesh): void {
+        this.isolateMaterial(mesh);
+        mesh.userData.dimCastShadow = mesh.castShadow;
+        mesh.castShadow = false;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        mesh.userData.dimBackup = materials.map((material): DimBackup => ({
+            transparent: material.transparent,
+            opacity: material.opacity,
+            depthWrite: material.depthWrite,
+        }));
+        for (const material of materials) {
+            material.transparent = true;
+            material.opacity = Math.min(material.opacity, DIM_OPACITY);
+            material.depthWrite = false;
+            material.needsUpdate = true;
+        }
+    }
+
+    private undimMesh(mesh: THREE.Mesh): void {
+        const backup = mesh.userData.dimBackup as DimBackup[] | undefined;
+        if (!backup) return;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        materials.forEach((material, i) => {
+            const saved = backup[i];
+            if (!saved) return;
+            material.transparent = saved.transparent;
+            material.opacity = saved.opacity;
+            material.depthWrite = saved.depthWrite;
+            material.needsUpdate = true;
+        });
+        mesh.castShadow = mesh.userData.dimCastShadow as boolean;
+        delete mesh.userData.dimBackup;
+        delete mesh.userData.dimCastShadow;
+    }
+
+    /**
+     * Placed copies of a model share its materials (Object3D.clone keeps them),
+     * so a mesh gets its own copy before any per-piece change (highlight, dim).
+     */
+    private isolateMaterial(mesh: THREE.Mesh): void {
+        if (mesh.userData.isolatedMaterial) return;
+        mesh.material = Array.isArray(mesh.material)
+            ? mesh.material.map((material) => material.clone())
+            : mesh.material.clone();
+        mesh.userData.isolatedMaterial = true;
+    }
+
+    /** The registered model containing `object`, if any. */
+    private rootOf(object: THREE.Object3D): THREE.Object3D | null {
+        let current: THREE.Object3D | null = object;
+        while (current && !this.registeredRoots.has(current)) {
+            current = current.parent;
+        }
+        return current;
     }
 
     /**
@@ -369,10 +514,7 @@ export class PickHelper {
      * by default, for the Inspect piece selection).
      */
     private highlightMesh(mesh: THREE.Mesh, colorHex = 0xff6600) {
-        if (!mesh.userData.isolatedMaterial) {
-            mesh.material = (mesh.material as THREE.Material).clone();
-            mesh.userData.isolatedMaterial = true;
-        }
+        this.isolateMaterial(mesh);
 
         const material = mesh.material as THREE.MeshStandardMaterial;
         if (material && material.emissive) {

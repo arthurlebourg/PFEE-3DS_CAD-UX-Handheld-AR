@@ -1,5 +1,6 @@
 import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark } from 'lucide';
 import type { ModeName } from '../modes/interactionMode.js';
+import { ModelPicker } from './modelPicker.js';
 
 export interface UIManagerCallbacks {
     /**
@@ -7,7 +8,7 @@ export interface UIManagerCallbacks {
      * truth and reflects the actual mode back through {@link UIManager.setMode}.
      */
     onModeToggle: () => void;
-    /** A model was chosen in the carousel. */
+    /** A model was chosen in the model picker. */
     onModelSelect: (modelName: string) => void;
     /** Delete the model currently selected in Edit mode. */
     onDelete: () => void;
@@ -38,7 +39,7 @@ export type UITarget = 'mode' | 'models' | 'model-actions' | 'help';
  *
  * Quick-access column (always visible in session):
  *   - Mode toggle: shows the current mode at a glance (icon + colour + caption)
- *   - Modèles: opens the model carousel
+ *   - Modèles: opens the model picker (modal grid, see ModelPicker)
  * Dev mode adds a gear radial menu with the debug buttons (picking colours,
  * perf stats); in prod the gear is omitted entirely.
  *
@@ -56,7 +57,7 @@ export class UIManager {
     private modeCaption = document.createElement('span');
     private btnModel = document.createElement('button');
     private btnHelp = document.createElement('button');
-    private modelSelectionPanel = document.createElement('div');
+    private readonly modelPicker: ModelPicker;
 
     // Contextual buttons, shown while a placed model is selected in Edit mode
     private btnDelete = document.createElement('button');
@@ -76,7 +77,6 @@ export class UIManager {
     private btnPerf: HTMLButtonElement | null = null;
 
     private isOpen = false;
-    private isModelPanelOpen = false;
     private activeModelName = '';
     private mode: ModeName = 'edit';
     private readonly isDevMode: boolean;
@@ -89,7 +89,7 @@ export class UIManager {
 
         this.injectStyles();
 
-        // Quick-access column: mode toggle + model carousel button
+        // Quick-access column: mode toggle + model picker button
         this.quickContainer.className =
             'ar-quick-container' + (isDevMode ? ' with-gear' : '');
         this.quickContainer.style.display = 'none';
@@ -102,6 +102,9 @@ export class UIManager {
 
         this.btnModel.className = 'ar-quick-btn btn-model';
         this.btnModel.innerHTML = `<i data-lucide="layers"></i>`;
+        this.btnModel.setAttribute('aria-label', 'Choisir un modèle');
+        this.btnModel.setAttribute('aria-haspopup', 'dialog');
+        this.btnModel.setAttribute('aria-expanded', 'false');
         const modelCaption = document.createElement('span');
         modelCaption.className = 'ar-quick-caption';
         modelCaption.textContent = 'Modèles';
@@ -154,19 +157,14 @@ export class UIManager {
             this.btnPerf  = this.createRadialButton('btn-perf',  'activity', 'Statistiques: OFF');
         }
 
-        // Model selection panel
-        this.modelSelectionPanel.className = 'ar-model-panel';
-        for (const model of models) {
-            const card = document.createElement('div');
-            card.className = 'ar-model-card';
-            card.setAttribute('data-model', model);
-
-            const displayName = model.replace('.glb', '').replace(/_/g, ' ').toUpperCase();
-            card.innerHTML = `<i data-lucide="layers"></i><span>${displayName}</span>`;
-
-            this.addPointerDownListener(card, () => this.selectModel(model));
-            this.modelSelectionPanel.appendChild(card);
-        }
+        // Model picker modal
+        this.modelPicker = new ModelPicker(models, {
+            onSelect: (model) => this.selectModel(model),
+            onClose: () => {
+                this.btnModel.classList.remove('active');
+                this.btnModel.setAttribute('aria-expanded', 'false');
+            },
+        });
 
         if (models.length > 0) {
             this.activeModelName = models[0];
@@ -175,6 +173,14 @@ export class UIManager {
         // Wire up events
         this.addPointerDownListener(this.btnMode,   () => this.callbacks.onModeToggle());
         this.addPointerDownListener(this.btnModel,  () => this.toggleModelPanel());
+        // pointerdown never fires from the keyboard; a click handler would
+        // double-toggle after a tap, so Enter/Space are wired explicitly.
+        this.btnModel.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                this.toggleModelPanel();
+            }
+        });
         this.addPointerDownListener(this.btnGear,   () => this.toggleGear());
         this.addPointerDownListener(this.btnDelete, () => this.callbacks.onDelete());
         this.addPointerDownListener(this.btnReset,  () => this.callbacks.onReset());
@@ -196,7 +202,6 @@ export class UIManager {
         // Prevent XR select events from bubbling through the overlay
         this.quickContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.container.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.modelSelectionPanel.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnDelete.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnReset.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnInvert.addEventListener('beforexrselect', (e) => e.preventDefault());
@@ -221,7 +226,7 @@ export class UIManager {
         if (this.isDevMode) {
             parent.appendChild(this.container);
         }
-        parent.appendChild(this.modelSelectionPanel);
+        this.modelPicker.attach(parent);
         parent.appendChild(this.btnDelete);
         parent.appendChild(this.btnReset);
         parent.appendChild(this.btnInvert);
@@ -295,8 +300,7 @@ export class UIManager {
         if (!show) {
             this.isOpen = false;
             this.container.classList.remove('open');
-            this.isModelPanelOpen = false;
-            this.modelSelectionPanel.classList.remove('open');
+            this.modelPicker.close();
             this.btnDelete.classList.remove('visible');
             this.btnReset.classList.remove('visible');
             this.btnInvert.classList.remove('visible');
@@ -343,18 +347,20 @@ export class UIManager {
     }
 
     private toggleModelPanel(): void {
-        this.isModelPanelOpen = !this.isModelPanelOpen;
-        this.modelSelectionPanel.classList.toggle('open', this.isModelPanelOpen);
-        this.btnModel.classList.toggle('active', this.isModelPanelOpen);
+        if (this.modelPicker.isOpen) {
+            this.modelPicker.close();
+            return;
+        }
+        this.modelPicker.open(this.activeModelName, this.btnModel);
+        this.btnModel.classList.add('active');
+        this.btnModel.setAttribute('aria-expanded', 'true');
     }
 
     private selectModel(modelName: string): void {
         this.activeModelName = modelName;
         this.updateUI();
         this.callbacks.onModelSelect(modelName);
-        this.isModelPanelOpen = false;
-        this.modelSelectionPanel.classList.remove('open');
-        this.btnModel.classList.remove('active');
+        this.modelPicker.close();
     }
 
     private toggleDebug(): void {
@@ -408,11 +414,6 @@ export class UIManager {
                 perfLabel.textContent = 'Statistiques: OFF';
             }
         }
-
-        // Model cards
-        this.modelSelectionPanel.querySelectorAll('.ar-model-card').forEach((card) => {
-            card.classList.toggle('active', card.getAttribute('data-model') === this.activeModelName);
-        });
 
         // Invert button: visible in inspect mode when UI is active
         const isSessionActive = this.quickContainer.style.display !== 'none';
@@ -633,68 +634,6 @@ export class UIManager {
                 opacity: 1;
                 transform: translateY(-50%) scale(1);
             }
-
-            .ar-model-panel {
-                position: absolute;
-                bottom: 30px;
-                left: 50%;
-                transform: translateX(-50%) translateY(120%);
-                display: flex;
-                gap: 15px;
-                padding: 15px 20px;
-                background: rgba(15, 15, 20, 0.85);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                border-radius: 20px;
-                backdrop-filter: blur(15px);
-                -webkit-backdrop-filter: blur(15px);
-                box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-                z-index: 1100;
-                opacity: 0;
-                pointer-events: none;
-                transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
-            }
-
-            .ar-model-panel.open {
-                transform: translateX(-50%) translateY(-70px);
-                opacity: 1;
-                pointer-events: auto;
-            }
-
-            .ar-model-card {
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                width: 95px;
-                height: 80px;
-                padding: 10px;
-                border-radius: 14px;
-                border: 1.5px solid rgba(255, 255, 255, 0.1);
-                background: rgba(255, 255, 255, 0.04);
-                color: rgba(255, 255, 255, 0.7);
-                cursor: pointer;
-                transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-size: 11px;
-                font-weight: bold;
-                text-align: center;
-                user-select: none;
-            }
-
-            .ar-model-card svg { margin-bottom: 6px; opacity: 0.7; transition: transform 0.25s; }
-            .ar-model-card span { white-space: nowrap; }
-
-            .ar-model-card:hover { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.25); color: #fff; }
-            .ar-model-card:hover svg { transform: translateY(-2px); opacity: 1; }
-
-            .ar-model-card.active {
-                background: rgba(0, 123, 255, 0.2);
-                border-color: #007bff;
-                color: #007bff;
-                box-shadow: 0 0 15px rgba(0, 123, 255, 0.4);
-            }
-
-            .ar-model-card.active svg { opacity: 1; stroke: #007bff; }
 
             .ar-delete-btn {
                 position: absolute;

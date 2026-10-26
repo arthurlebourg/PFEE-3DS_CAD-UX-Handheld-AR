@@ -20,6 +20,7 @@ import { TutorialEventBus } from './tutorial/tutorialEvents.js';
 import { TutorialManager } from './tutorial/tutorialManager.js';
 import { PlacementOverlay } from './ui/placementOverlay.js';
 import { HierarchySlider } from './ui/hierarchySlider.js';
+import { buildAssemblyTree } from './scene/assemblyTree.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const modelUrls: Record<string, string> = {};
@@ -80,6 +81,16 @@ let spatialMappingOverlay: SpatialMappingOverlay;
 let historyManager: ModeHistoryManager;
 let rotateStartAngle = 0;
 
+/**
+ * ?placementDebug=1 shows the hit-test pose and each placed model's bounding
+ * box and origin, to tell on device a model sunk by its origin from a
+ * misestimated plane. Off by default.
+ */
+const placementDebug = new URLSearchParams(window.location.search).get('placementDebug') === '1';
+let debugHitAxes: THREE.AxesHelper | null = null;
+/** Per placed model: a frame tracking its matrixWorld (holding its local box) and its origin axes. */
+const debugModelHelpers = new Map<THREE.Object3D, { frame: THREE.Group; axes: THREE.AxesHelper }>();
+
 init();
 
 /**
@@ -93,6 +104,12 @@ function init(): void {
     
     xrRig = new THREE.Group();
     scene.add(xrRig);
+
+    if (placementDebug) {
+        debugHitAxes = new THREE.AxesHelper(0.05);
+        debugHitAxes.visible = false;
+        scene.add(debugHitAxes);
+    }
 
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
     xrRig.add(camera);
@@ -258,6 +275,7 @@ function init(): void {
         },
         hideGranularity: () => {
             hierarchySlider.hide();
+            pickHelper.clearContextDimming();
         },
         onPartPicked: () => {
             tutorialEvents.emit({ kind: 'part-picked' });
@@ -322,6 +340,8 @@ function init(): void {
             tutorial.stop();
             spatialMappingOverlay.hide();
             placementOverlay.setVisible(false);
+            hierarchySlider.hide();
+            pickHelper.clearSelection();
         });
     }
 
@@ -352,20 +372,12 @@ function loadModel(modelName: string): void {
     const loader = new GLTFLoader();
     loader.load(url, (gltf) => {
         loadedModel = gltf.scene;
+        groundModel(loadedModel);
+        buildAssemblyTree(loadedModel, gltf.parser.associations);
 
         const box = new THREE.Box3().setFromObject(loadedModel);
         const size = new THREE.Vector3();
         box.getSize(size);
-
-        // Re-pivot so the model rests on its origin: bottom of the bounding
-        // box at y = 0, centered in x/z. Shifting the direct children keeps the
-        // root free for the placement pose, and adds no level to the hierarchy.
-        const pivot = new THREE.Vector3();
-        box.getCenter(pivot);
-        pivot.y = box.min.y;
-        for (const child of loadedModel.children) {
-            child.position.sub(pivot);
-        }
         const maxDim = Math.max(size.x, size.y, size.z);
         const targetSize = 0.3; // 30 cm
         const scale = maxDim > 0 ? targetSize / maxDim : 1;
@@ -389,6 +401,7 @@ function loadModel(modelName: string): void {
                 shadowSystem.unregisterModel(devModel);
                 scene.remove(devModel);
                 pickHelper.removeModel(devModel);
+                removePlacementDebug(devModel);
             }
             devModel = loadedModel.clone();
             devModel.applyMatrix4(currentScaleMatrix);
@@ -402,6 +415,7 @@ function loadModel(modelName: string): void {
 
             scene.add(devModel);
             pickHelper.registerModel(devModel);
+            addPlacementDebug(devModel);
 
             // Desktop dev mode has no WebXR hit-test. Use the horizontal grid
             // at y = 0 as the physical support surface so shadows are testable.
@@ -418,6 +432,105 @@ function loadModel(modelName: string): void {
             }
         }
     });
+}
+
+/**
+ * Re-anchors a freshly loaded glTF so its origin sits at the bottom centre of
+ * its bounding box. Placement poses the origin on the hit-test point, and CAD
+ * exports are usually centred on theirs, which sank half the model into the
+ * floor. Only the root's direct children move: no geometry is touched, and no
+ * extra node is added (it would show up as a level in the granularity slider).
+ */
+function groundModel(root: THREE.Object3D): void {
+    const box = localBoundingBox(root);
+    if (box.isEmpty()) return;
+
+    const center = box.getCenter(new THREE.Vector3());
+    const offset = new THREE.Vector3(-center.x, -box.min.y, -center.z);
+    for (const child of root.children) {
+        child.position.add(offset);
+    }
+    root.updateMatrixWorld(true);
+}
+
+/**
+ * Bounding box of `root`'s content in `root`'s own frame. The root transform
+ * is cleared while measuring, so a pose or a CAD unit scale on it cannot skew
+ * the box; `root` must be unparented or a child of the scene. Precise (per
+ * vertex): the fast box inflates under rotated parts and would leave the model
+ * floating.
+ */
+function localBoundingBox(root: THREE.Object3D): THREE.Box3 {
+    const position = root.position.clone();
+    const quaternion = root.quaternion.clone();
+    const scale = root.scale.clone();
+
+    root.position.set(0, 0, 0);
+    root.quaternion.identity();
+    root.scale.set(1, 1, 1);
+    root.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(root, true);
+
+    root.position.copy(position);
+    root.quaternion.copy(quaternion);
+    root.scale.copy(scale);
+    root.updateMatrixWorld(true);
+
+    return box;
+}
+
+/** Debug only: draws `model`'s local box and its origin (the placement point). */
+function addPlacementDebug(model: THREE.Object3D): void {
+    if (!placementDebug) return;
+
+    // The frame replays the model's matrixWorld, so the box turns and scales
+    // with it; the axes stay 5 cm whatever the model's own scale.
+    const frame = new THREE.Group();
+    frame.matrixAutoUpdate = false;
+    frame.add(new THREE.Box3Helper(localBoundingBox(model)));
+    const axes = new THREE.AxesHelper(0.05);
+
+    scene.add(frame, axes);
+    debugModelHelpers.set(model, { frame, axes });
+}
+
+function removePlacementDebug(model: THREE.Object3D): void {
+    const helpers = debugModelHelpers.get(model);
+    if (!helpers) return;
+
+    scene.remove(helpers.frame, helpers.axes);
+    (helpers.frame.children[0] as THREE.Box3Helper).dispose();
+    helpers.axes.dispose();
+    debugModelHelpers.delete(model);
+}
+
+/** Debug only: follows placed models (hidden while deleted / undone). */
+function updatePlacementDebug(): void {
+    for (const [model, { frame, axes }] of debugModelHelpers) {
+        const shown = model.parent !== null;
+        frame.visible = shown;
+        axes.visible = shown;
+        if (!shown) continue;
+
+        model.updateWorldMatrix(true, false);
+        frame.matrix.copy(model.matrixWorld);
+        frame.matrixWorldNeedsUpdate = true;
+        axes.position.copy(model.position);
+        axes.quaternion.copy(model.quaternion);
+    }
+}
+
+/** Debug only: the raw hit-test pose, armed or not, in the same frame as the preview. */
+function showDebugHitPose(pose: XRPose | undefined): void {
+    if (!debugHitAxes) return;
+
+    debugHitAxes.visible = pose !== undefined;
+    if (!pose) return;
+
+    const { position, orientation } = pose.transform;
+    debugHitAxes.position.set(position.x, position.y, position.z).multiplyScalar(rigScale);
+    debugHitAxes.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
 }
 
 /**
@@ -493,6 +606,7 @@ function placeModel(): void {
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
+    addPlacementDebug(model);
 
     // The model root already carries the hit-test pose, so the invisible
     // receiver is aligned with the exact real surface used for placement.
@@ -683,6 +797,7 @@ function resetSceneState(): void {
     editMode.resetScaleState();
     editMode.clearSelection();
     pickHelper.clearSelection();
+    hierarchySlider.hide();
 
     // The tour's actions were recorded as it went; undoing them now would
     // replay state this reset just wiped.
@@ -908,6 +1023,10 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                 new THREE.Matrix4().fromArray(pose.transform.matrix).decompose(posePosition, poseRotation, poseScale);
             }
 
+            if (debugHitAxes) {
+                showDebugHitPose(pose);
+            }
+
             const placementArmed =
                 modeManager.currentName === 'edit' && editMode.isArmed;
             if (pose && !spatialMappingOverlay.isComplete) {
@@ -947,6 +1066,10 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             spatialMappingOverlay.updateWebXR(hasSurface);
         }
     }
+    if (placementDebug) {
+        updatePlacementDebug();
+    }
+
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {
