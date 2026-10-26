@@ -1,3 +1,5 @@
+
+import * as THREE from 'three';
 import type { Object3D } from 'three';
 import type { InteractionMode, PinchState } from './interactionMode.js';
 import { clamp } from './interactionMode.js';
@@ -22,6 +24,7 @@ interface EditModeDeps {
     onRotateStart?: () => void;
     /** Called when scene rotation via joystick ends. */
     onRotateEnd?: () => void;
+    camera: THREE.Camera;
 }
 
 /** Perceived-scale bounds, matching the old slider's 10%–1000% range. */
@@ -47,6 +50,7 @@ export class EditMode implements InteractionMode {
 
     private armed = false;
     private selected: Object3D | null = null;
+    private followingModel: Object3D | null = null;
     private committedPerceivedScale = 1;
     private currentPerceivedScale = 1;
     private pinchStartPerceivedScale = 1;
@@ -79,6 +83,21 @@ export class EditMode implements InteractionMode {
         return this.selected;
     }
 
+    public get followingModelRef(): Object3D | null {
+        return this.followingModel;
+    }
+
+    public updateFollowingModel(followDistance = 0.7): void {
+        if (!this.followingModel) return;
+        const cam = this.deps.camera;
+        const dir = new THREE.Vector3();
+        cam.getWorldDirection(dir);
+        const targetPos = new THREE.Vector3();
+        cam.getWorldPosition(targetPos);
+        targetPos.addScaledVector(dir, followDistance);
+        this.followingModel.position.lerp(targetPos, 0.12);
+    }
+
     /** Arms placement: the next tap will place the loaded model. */
     public arm(): void {
         this.armed = true;
@@ -90,6 +109,7 @@ export class EditMode implements InteractionMode {
     }
 
     public clearSelection(): void {
+        this.followingModel = null;
         this.select(null);
     }
 
@@ -117,7 +137,25 @@ export class EditMode implements InteractionMode {
             return;
         }
 
-        this.select(this.deps.pickModel(inputSource));
+        const picked = this.deps.pickModel(inputSource);
+
+        if (!picked) {
+            this.followingModel = null;
+            this.select(null);
+            return;
+        }
+
+        if (picked === this.selected) {
+            if (this.followingModel) {
+                this.followingModel = null;
+            } else {
+                this.followingModel = picked;
+            }
+            return;
+        }
+
+        this.followingModel = null;
+        this.select(picked);
     }
 
     public onHoldStart(x: number, y: number): void {

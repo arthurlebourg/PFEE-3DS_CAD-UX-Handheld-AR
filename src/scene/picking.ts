@@ -20,7 +20,7 @@ export class PickHelper {
     public pickingTexture: THREE.WebGLRenderTarget;
 
     public selectedMeshes: THREE.Mesh[] = [];
-
+    public attachedParts: Array<{ mesh: THREE.Mesh; offsetMatrix: THREE.Matrix4 }> = [];
 
     private idToMeshMap = new Map<number, THREE.Mesh>();
     private nextId = 1;
@@ -283,6 +283,25 @@ export class PickHelper {
 
     }
 
+    public attachSelectedMeshesToCamera(camera: THREE.Camera): void {
+        this.attachedParts = [];
+        const cameraInverse = camera.matrixWorldInverse.clone();
+        for (const mesh of this.selectedMeshes) {
+            const offset = new THREE.Matrix4().multiplyMatrices(cameraInverse, mesh.matrixWorld);
+            this.attachedParts.push({ mesh, offsetMatrix: offset });
+        }
+    }
+
+    public updateAttachedMeshes(camera: THREE.Camera): void {
+        for (const part of this.attachedParts) {
+            if (!part.mesh.parent) continue;
+            const target = new THREE.Vector3().setFromMatrixPosition(
+                new THREE.Matrix4().multiplyMatrices(camera.matrixWorld, part.offsetMatrix)
+            );
+            part.mesh.parent.worldToLocal(target);
+            part.mesh.position.lerp(target, 0.15);
+        }
+    }
     /**
      * Clears the current selection.
      */
@@ -291,6 +310,7 @@ export class PickHelper {
             this.removeHighlight(mesh);
         }
         this.selectedMeshes = [];
+        this.attachedParts = [];
     }
 
     /**

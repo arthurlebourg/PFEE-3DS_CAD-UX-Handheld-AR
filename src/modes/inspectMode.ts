@@ -6,6 +6,7 @@ import type { HistoryAction } from '../history/historyManager.js';
 
 interface InspectModeDeps {
     pickHelper: PickHelper;
+    camera: THREE.Camera;
     /** GPU-picks the mesh under the tap (needs the XRInputSource's screen coords). */
     pickMesh(inputSource?: XRInputSource): THREE.Mesh | null;
     /** Drives the exploded view; 0 = assembled. */
@@ -79,10 +80,24 @@ export class InspectMode implements InteractionMode {
                 this.deps.showGranularity(pickHelper.getSelectableAncestorChain(pickedMesh));
             }
             this.deps.onPartPicked?.();
+        } else if (pickHelper.attachedParts.length > 0) {
+            pickHelper.attachedParts = [];
         } else if (pickHelper.selectedMeshes.length > 0) {
-            pickHelper.clearSelection();
-        }
+            // Si tout est sélectionné → attacher à la caméra pour le déplacer
+            // Sinon → déselectionner
+            const allMeshes = Array.from(new Set(
+                Array.from((pickHelper as any).idToMeshMap.values()) as THREE.Mesh[]
+            ));
+            const allSelected = allMeshes.length > 0 &&
+                allMeshes.every(m => pickHelper.selectedMeshes.includes(m));
 
+            if (allSelected) {
+                pickHelper.attachSelectedMeshesToCamera(this.deps.camera);
+            } else {
+                pickHelper.clearSelection();
+                this.deps.hideGranularity();
+            }
+        }
         // Re-tapping a selected piece deselects it, so the slider follows the
         // selection rather than the tap.
         if (pickHelper.selectedMeshes.length === 0) {

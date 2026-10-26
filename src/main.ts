@@ -198,6 +198,7 @@ function init(): void {
 
     editMode = new EditMode({
         joystick,
+        camera,
         placeModel: () => {
             if (!spatialMappingOverlay.isComplete) {
                 return false;
@@ -252,6 +253,7 @@ function init(): void {
 
     inspectMode = new InspectMode({
         pickHelper,
+        camera,  
         pickMesh: (inputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf),
         onExplode: (factor) => {
             explode(factor);
@@ -943,6 +945,7 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             spatialMappingOverlay.updateWebXR(hasSurface);
         }
     }
+    editMode.updateFollowingModel();
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {
