@@ -11,7 +11,7 @@ import type { TutorialEvent } from './tutorialEvents.js';
  * "ajuster l'échelle" as learned and the user moves on having learned nothing.
  */
 export interface StepProgress {
-    /** Accumulated absolute yaw applied through the joystick, in radians. */
+    /** Accumulated absolute yaw applied through the two-finger twist, in radians. */
     rotationRad: number;
     /** Widest perceived-scale ratio reached since the step started (>= 1). */
     scaleSpread: number;
@@ -88,9 +88,9 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         id: 'rotate',
         mode: 'edit',
         title: 'Faire tourner la scène',
-        body: 'Maintenez un doigt appuyé une seconde : un joystick apparaît. Glissez ensuite vers la gauche ou la droite.',
-        glyph: 'hold-drag',
-        hint: 'Gardez le doigt immobile une seconde complète, sans le lever, puis glissez horizontalement.',
+        body: "Posez deux doigts sur l'écran et faites-les pivoter, comme pour tourner une carte.",
+        glyph: 'twist',
+        hint: "Gardez l'écart entre vos doigts et tournez-les franchement autour de leur milieu.",
         isComplete: (event, progress) => isRelease(event) && progress.rotationRad >= MIN_ROTATION_RAD,
     },
     {

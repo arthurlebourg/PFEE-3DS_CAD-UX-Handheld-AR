@@ -1,11 +1,10 @@
 import type { Object3D } from 'three';
 import type { InteractionMode, PinchState } from './interactionMode.js';
 import { clamp } from './interactionMode.js';
-import type { JoystickWidget } from '../ui/joystickWidget.js';
 import type { HistoryAction } from '../history/historyManager.js';
+import type { SceneTransform } from '../scene/sceneRotator.js';
 
 interface EditModeDeps {
-    joystick: JoystickWidget;
     /** Places the armed model at the preview cursor. Returns true if placed. */
     placeModel(): boolean;
     /** Applies a new rig scale (the inverse of the perceived model scale). */
@@ -18,15 +17,19 @@ interface EditModeDeps {
     onSelectionChange(model: Object3D | null): void;
     /** Pushes an undoable action to the edit history stack. */
     onAction?: (action: HistoryAction) => void;
-    /** Called when scene rotation via joystick begins. */
-    onRotateStart?: () => void;
-    /** Called when scene rotation via joystick ends. */
-    onRotateEnd?: () => void;
+    /** Freezes the scene orientation and tilt axis a two-finger gesture is measured against. */
+    beginSceneRotation(): void;
+    /** Rotates the scene by a yaw and a tilt (radians), relative to the gesture start. */
+    rotateScene(yaw: number, tilt: number): void;
+    getSceneTransform(): SceneTransform;
+    setSceneTransform(transform: SceneTransform): void;
 }
 
 /** Perceived-scale bounds, matching the old slider's 10%–1000% range. */
 const MIN_PERCEIVED_SCALE = 0.1;
 const MAX_PERCEIVED_SCALE = 10;
+/** Tilt per unit of normalized vertical drag: ~60% of the short screen edge tips the scene 90°. */
+const TILT_RAD_PER_DRAG = Math.PI / 2;
 
 /**
  * EditMode: compose the scene.
@@ -35,10 +38,9 @@ const MAX_PERCEIVED_SCALE = 10;
  *   placing disarms so a stray tap can't drop a second copy). When placement
  *   is not armed, tap selects the placed model under the finger, exposing the
  *   contextual Delete/Reset buttons; tapping empty space deselects.
- * - Two-finger pinch rescales the perceived scene scale (drives the rig,
- *   replacing the old "Échelle perçue" slider).
- * - Holding a finger summons the joystick that rotates the scene around the
- *   placed models' center.
+ * - Two fingers manipulate the scene, as in a maps app: pinch rescales the
+ *   perceived scene scale (drives the rig), twisting turns the scene around
+ *   the vertical, and dragging both fingers vertically tilts it.
  */
 export class EditMode implements InteractionMode {
     public readonly name = 'edit';
@@ -50,6 +52,7 @@ export class EditMode implements InteractionMode {
     private committedPerceivedScale = 1;
     private currentPerceivedScale = 1;
     private pinchStartPerceivedScale = 1;
+    private pinchStartTransform: SceneTransform | null = null;
 
     constructor(deps: EditModeDeps) {
         this.deps = deps;
@@ -106,7 +109,6 @@ export class EditMode implements InteractionMode {
 
     public exit(): void {
         this.clearSelection();
-        this.deps.joystick.hide();
     }
 
     public onTap(inputSource?: XRInputSource): void {
@@ -120,49 +122,53 @@ export class EditMode implements InteractionMode {
         this.select(this.deps.pickModel(inputSource));
     }
 
-    public onHoldStart(x: number, y: number): void {
-        this.deps.onRotateStart?.();
-        this.deps.joystick.show(x, y);
-    }
-
-    public onHoldMove(dx: number, dy: number): void {
-        this.deps.joystick.move(dx, dy);
-    }
-
-    public onHoldEnd(): void {
-        this.deps.joystick.hide();
-        this.deps.onRotateEnd?.();
-    }
-
     public onPinchStart(): void {
         this.pinchStartPerceivedScale = this.committedPerceivedScale;
+        this.pinchStartTransform = this.deps.getSceneTransform();
+        this.deps.beginSceneRotation();
     }
 
     public onPinchMove(pinch: PinchState): void {
-        this.currentPerceivedScale = clamp(
-            this.committedPerceivedScale * pinch.ratio,
-            MIN_PERCEIVED_SCALE,
-            MAX_PERCEIVED_SCALE,
-        );
-        this.deps.onRigScale(1 / this.currentPerceivedScale);
+        if (pinch.zoomRatio !== 1) {
+            this.currentPerceivedScale = clamp(
+                this.committedPerceivedScale * pinch.zoomRatio,
+                MIN_PERCEIVED_SCALE,
+                MAX_PERCEIVED_SCALE,
+            );
+            this.deps.onRigScale(1 / this.currentPerceivedScale);
+        }
+
+        if (pinch.twist !== 0 || pinch.tilt !== 0) {
+            this.deps.rotateScene(pinch.twist, pinch.tilt * TILT_RAD_PER_DRAG);
+        }
     }
 
+    /** One undoable step per gesture, whichever of zoom / twist / tilt it used. */
     public onPinchEnd(): void {
-        const start = this.pinchStartPerceivedScale;
-        const end = this.currentPerceivedScale;
+        const startScale = this.pinchStartPerceivedScale;
+        const endScale = this.currentPerceivedScale;
         this.committedPerceivedScale = this.currentPerceivedScale;
 
-        if (Math.abs(end - start) > 0.01) {
-            this.deps.onAction?.({
-                description: 'Échelle perçue',
-                undo: () => {
-                    this.setPerceivedScale(start);
-                },
-                redo: () => {
-                    this.setPerceivedScale(end);
-                },
-            });
-        }
+        const startTransform = this.pinchStartTransform;
+        const endTransform = this.deps.getSceneTransform();
+        this.pinchStartTransform = null;
+
+        const scaled = Math.abs(endScale - startScale) > 0.01;
+        const rotated = startTransform !== null &&
+            startTransform.orientation.angleTo(endTransform.orientation) > 0.01;
+        if (!scaled && !rotated) return;
+
+        this.deps.onAction?.({
+            description: 'Échelle / orientation scène',
+            undo: () => {
+                this.setPerceivedScale(startScale);
+                if (startTransform) this.deps.setSceneTransform(startTransform);
+            },
+            redo: () => {
+                this.setPerceivedScale(endScale);
+                this.deps.setSceneTransform(endTransform);
+            },
+        });
     }
 
     private select(model: Object3D | null): void {

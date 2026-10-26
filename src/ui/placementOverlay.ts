@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { realToScene } from '../scene/sceneRotator.js';
 
 /** Physical distance (metres) beyond which placement is blocked. */
 export const MAX_PLACEMENT_DISTANCE = 5.0;
@@ -88,7 +89,8 @@ export class PlacementOverlay {
     }
 
     /**
-     * Updates reticle position and colour each frame.
+     * Updates reticle position and colour each frame. The pose is real-world
+     * (hit-test); the rig maps it into the rotated / rescaled scene.
      * @param pending true while surface mapping is still stabilizing: the
      *   reticle pulses in white, and pops when it then locks onto the surface.
      * @returns true when the position is within MAX_PLACEMENT_DISTANCE.
@@ -96,12 +98,11 @@ export class PlacementOverlay {
     public updateReticle(
         posePosition: THREE.Vector3,
         poseRotation: THREE.Quaternion,
-        rigScale: number,
+        xrRig: THREE.Object3D,
         pending = false
     ): boolean {
         this.reticle.visible = true;
-        this.reticle.position.copy(posePosition).multiplyScalar(rigScale);
-        this.reticle.quaternion.copy(poseRotation);
+        realToScene(xrRig, posePosition, poseRotation, this.reticle.position, this.reticle.quaternion);
 
         const now = performance.now();
         if (this.wasPending && !pending) {

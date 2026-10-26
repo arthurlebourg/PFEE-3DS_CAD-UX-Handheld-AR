@@ -6,10 +6,10 @@ import { isDevMode, setupDevMode } from './devMode.js';
 
 import { UIManager } from './ui/uiManager.js';
 import { PerfProbe } from './ui/perf.js';
-import { JoystickWidget } from './ui/joystickWidget.js';
 import { PickHelper } from './scene/picking.js';
-import { SceneRotator } from './scene/sceneRotator.js';
+import { SceneRotator, realToScene } from './scene/sceneRotator.js';
 import { ShadowSystem } from './scene/shadowSystem.js';
+import type { ShadowSurfacePose } from './scene/shadowSystem.js';
 import { GestureRecognizer } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
 import { EditMode } from './modes/editMode.js';
@@ -30,9 +30,17 @@ for (const path in modules) {
 const availableModels = Object.keys(modelUrls);
 
 /** Physical (rig-independent) pose stored on a model's userData. */
+/**
+ * On the preview, `physical*` is the real-world hit-test pose. On a placed
+ * model it is the model's scene pose at unit rig scale (equal to the real
+ * pose only if the scene was unrotated at placement), and `surface*` keeps
+ * the real surface it was placed on, for its shadow receiver.
+ */
 interface PhysicalPose {
     physicalPosition?: THREE.Vector3;
     physicalRotation?: THREE.Quaternion;
+    surfacePosition?: THREE.Vector3;
+    surfaceRotation?: THREE.Quaternion;
 }
 
 const currentScaleMatrix = new THREE.Matrix4().makeScale(1, 1, 1);
@@ -78,7 +86,6 @@ let editMode: EditMode;
 let inspectMode: InspectMode;
 let spatialMappingOverlay: SpatialMappingOverlay;
 let historyManager: ModeHistoryManager;
-let rotateStartAngle = 0;
 
 init();
 
@@ -158,20 +165,6 @@ function init(): void {
     historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
-    const joystick = new JoystickWidget((strength) => {
-        const maxSpeed = 0.06;
-        const deltaRad = strength * maxSpeed;
-
-        sceneRotator.rotateAroundCenter(xrRig, placedModels, deltaRad);
-
-        // With nothing placed the rotation is a no-op, so it must not count
-        // towards the tutorial's rotation step either.
-        if (placedModels.length > 0) {
-            tutorialEvents.emit({ kind: 'scene-rotated', deltaRad });
-        }
-    });
-    joystick.attach(document.body);
-
     // The tour waits for mapping: its first step places a model, which needs a
     // surface, and its cards would otherwise stack under the scan overlay.
     spatialMappingOverlay = new SpatialMappingOverlay(() => {
@@ -192,8 +185,10 @@ function init(): void {
     }, isDevMode);
     spatialMappingOverlay.attach(document.body);
 
+    // Yaw of the current two-finger gesture, so the tutorial gets deltas.
+    let gestureYaw = 0;
+
     editMode = new EditMode({
-        joystick,
         placeModel: () => {
             if (!spatialMappingOverlay.isComplete) {
                 return false;
@@ -226,23 +221,24 @@ function init(): void {
         onAction: (action) => {
             historyManager.push('edit', action);
         },
-        onRotateStart: () => {
-            rotateStartAngle = sceneRotator.getAngle();
+        beginSceneRotation: () => {
+            gestureYaw = 0;
+            sceneRotator.beginGesture(xrRig, placedModels, camera);
         },
-        onRotateEnd: () => {
-            const start = rotateStartAngle;
-            const end = sceneRotator.getAngle();
-            if (Math.abs(end - start) > 0.01) {
-                historyManager.push('edit', {
-                    description: 'Rotation scène',
-                    undo: () => {
-                        sceneRotator.setAngle(start, xrRig, placedModels);
-                    },
-                    redo: () => {
-                        sceneRotator.setAngle(end, xrRig, placedModels);
-                    },
-                });
+        rotateScene: (yaw, tilt) => {
+            sceneRotator.applyGesture(xrRig, placedModels, yaw, tilt);
+
+            // With nothing placed the rotation is a no-op, so it must not count
+            // towards the tutorial's rotation step either.
+            const deltaRad = yaw - gestureYaw;
+            gestureYaw = yaw;
+            if (placedModels.length > 0 && deltaRad !== 0) {
+                tutorialEvents.emit({ kind: 'scene-rotated', deltaRad });
             }
+        },
+        getSceneTransform: () => sceneRotator.getTransform(),
+        setSceneTransform: (transform) => {
+            sceneRotator.setTransform(transform, xrRig);
         },
     });
 
@@ -432,7 +428,8 @@ function onSelect(inputSource?: XRInputSource): void {
 
 /**
  * Updates the scale of the camera rig and adjusts placed models' positions
- * to keep them anchored to their physical positions.
+ * to keep them anchored to their physical positions. Real-world anchors
+ * (reticle, preview, shadow receivers) follow on the next frame.
  */
 function updateRigScale(newScale: number): void {
     rigScale = newScale;
@@ -446,21 +443,11 @@ function updateRigScale(newScale: number): void {
         const { physicalPosition } = model.userData as PhysicalPose;
         if (physicalPosition) {
             model.position.copy(physicalPosition).multiplyScalar(rigScale);
-            shadowSystem.updateSurface(model, {
-                position: model.position,
-                quaternion: model.quaternion,
-            });
         }
     }
 
-    // Update preview model position
-    const previewPose = previewModel?.userData as PhysicalPose | undefined;
-    if (previewModel && previewPose?.physicalPosition) {
-        previewModel.position.copy(previewPose.physicalPosition).multiplyScalar(rigScale);
-    }
-
-    // Since the scale changes the positions, we need to update the center of rotation
-    sceneRotator.refresh(xrRig, placedModels);
+    // The rig offset is in scaled units, so it follows the new scale.
+    sceneRotator.refresh(xrRig);
 
     // Clear picking selection to prevent offset/scale mismatch while dragging
     if (pickHelper) {
@@ -481,10 +468,15 @@ function placeModel(): void {
     const model = loadedModel.clone();
     previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
     
+    // The preview already sits at the hit-test pose mapped into the (possibly
+    // rotated) scene: keep that scene pose, so the model lands under the
+    // reticle and then turns with the rest of the scene.
     const previewPose = previewModel.userData as PhysicalPose;
     if (previewPose.physicalPosition && previewPose.physicalRotation) {
-        model.userData.physicalPosition = previewPose.physicalPosition.clone();
-        model.userData.physicalRotation = previewPose.physicalRotation.clone();
+        model.userData.physicalPosition = model.position.clone().divideScalar(rigScale);
+        model.userData.physicalRotation = model.quaternion.clone();
+        model.userData.surfacePosition = previewPose.physicalPosition.clone();
+        model.userData.surfaceRotation = previewPose.physicalRotation.clone();
     }
 
     // Save original scale (including auto-fit scale) for the Reset action
@@ -494,14 +486,8 @@ function placeModel(): void {
     placedModels.push(model);
     pickHelper.registerModel(model);
 
-    // The model root already carries the hit-test pose, so the invisible
-    // receiver is aligned with the exact real surface used for placement.
-    shadowSystem.registerModel(model, {
-        position: model.position,
-        quaternion: model.quaternion,
-    });
-
-    sceneRotator.refresh(xrRig, placedModels);
+    // The invisible receiver lies on the exact real surface used for placement.
+    shadowSystem.registerModel(model, shadowSurfacePose(model));
 
     historyManager.push('edit', {
         description: 'Placer modèle',
@@ -516,13 +502,11 @@ function placeModel(): void {
             if (idx !== -1) {
                 placedModels.splice(idx, 1);
             }
-            sceneRotator.refresh(xrRig, placedModels);
         },
         redo: () => {
             scene.add(model);
             placedModels.push(model);
             pickHelper.registerModel(model);
-            sceneRotator.refresh(xrRig, placedModels);
         },
     });
 }
@@ -566,8 +550,6 @@ function deleteSelectedModel(): void {
         devModel = null;
     }
 
-    sceneRotator.refresh(xrRig, placedModels);
-
     historyManager.push('edit', {
         description: 'Supprimer modèle',
         undo: () => {
@@ -581,7 +563,6 @@ function deleteSelectedModel(): void {
                 devModel = model;
             }
             pickHelper.registerModel(model);
-            sceneRotator.refresh(xrRig, placedModels);
             editMode.selectModel(model);
         },
         redo: () => {
@@ -598,7 +579,6 @@ function deleteSelectedModel(): void {
             if (model === devModel) {
                 devModel = null;
             }
-            sceneRotator.refresh(xrRig, placedModels);
         },
     });
 }
@@ -613,10 +593,12 @@ function doResetModel(model: THREE.Object3D): void {
     inspectMode.showAllHidden(false);
     inspectMode.resetExplodeState();
 
-    // Reset camera rig rotation and perceived scale to their default values.
+    // Reset camera rig rotation and perceived scale to their default values,
+    // and put every placed model back where it was placed on the real table.
     sceneRotator.reset(xrRig);
     updateRigScale(1.0);
     editMode.resetScaleState();
+    reanchorModelsToSurface();
 
     // Restore every part's original local transform (saved at registration).
     model.traverse((child) => {
@@ -632,19 +614,13 @@ function doResetModel(model: THREE.Object3D): void {
         }
     });
 
-    // Restore the model's own pose and scale.
+    // Restore the model's own pose (placed models were re-anchored above).
     if (model === devModel) {
         if (model.userData.originalPosition) {
             model.position.copy(model.userData.originalPosition as THREE.Vector3);
         }
         if (model.userData.originalQuaternion) {
             model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
-        }
-    } else {
-        const pose = model.userData as PhysicalPose;
-        if (pose.physicalPosition && pose.physicalRotation) {
-            model.position.copy(pose.physicalPosition);
-            model.quaternion.copy(pose.physicalRotation);
         }
     }
     if (model.userData.originalModelScale) {
@@ -657,21 +633,66 @@ function doResetModel(model: THREE.Object3D): void {
             quaternion: new THREE.Quaternion(),
         });
     } else {
-        shadowSystem.updateSurface(model, {
-            position: model.position,
-            quaternion: model.quaternion,
+        shadowSystem.updateSurface(model, shadowSurfacePose(model));
+    }
+}
+
+/**
+ * Puts every placed model back on the real surface it was placed on, upright.
+ *
+ * A model placed while the scene was rotated keeps that rotation baked into
+ * its scene pose (so it landed under the reticle); once the scene orientation
+ * is reset, that pose alone would show it elsewhere, possibly on its side.
+ * With an unrotated scene the real placement pose is the scene pose, scaled.
+ */
+function reanchorModelsToSurface(): void {
+    for (const model of placedModels) {
+        const pose = model.userData as PhysicalPose;
+        if (!pose.surfacePosition || !pose.surfaceRotation) continue;
+
+        pose.physicalPosition = pose.surfacePosition.clone();
+        pose.physicalRotation = pose.surfaceRotation.clone();
+        model.position.copy(pose.physicalPosition).multiplyScalar(rigScale);
+        model.quaternion.copy(pose.physicalRotation);
+        // The root turned: the cached bounding-box pivot offset is stale.
+        delete model.userData.pivotOffset;
+    }
+}
+
+type ModelPoses = Map<THREE.Object3D, { position: THREE.Vector3; rotation: THREE.Quaternion }>;
+
+/** Placed models' unit-scale root poses, to undo a {@link reanchorModelsToSurface}. */
+function snapshotModelPoses(): ModelPoses {
+    const poses: ModelPoses = new Map();
+    for (const model of placedModels) {
+        const pose = model.userData as PhysicalPose;
+        if (!pose.physicalPosition || !pose.physicalRotation) continue;
+        poses.set(model, {
+            position: pose.physicalPosition.clone(),
+            rotation: pose.physicalRotation.clone(),
         });
     }
+    return poses;
+}
 
-    sceneRotator.refresh(xrRig, placedModels);
+function restoreModelPoses(poses: ModelPoses): void {
+    for (const [model, { position, rotation }] of poses) {
+        const pose = model.userData as PhysicalPose;
+        pose.physicalPosition = position.clone();
+        pose.physicalRotation = rotation.clone();
+        model.position.copy(position).multiplyScalar(rigScale);
+        model.quaternion.copy(rotation);
+        delete model.userData.pivotOffset;
+    }
 }
 
 /**
  * Undoes what a tutorial run leaves behind: hidden pieces, an exploded view,
- * a rotated rig and a changed perceived scale.
+ * a rotated rig and a changed perceived scale; placed models go back where
+ * they were placed.
  *
  * Unlike the Réinitialiser button this needs no selection — the tour never
- * requires one — and it leaves each model's own pose alone.
+ * requires one.
  */
 function resetSceneState(): void {
     inspectMode.showAllHidden();
@@ -681,6 +702,7 @@ function resetSceneState(): void {
     sceneRotator.reset(xrRig);
     updateRigScale(1.0);
     editMode.resetScaleState();
+    reanchorModelsToSurface();
     editMode.clearSelection();
     pickHelper.clearSelection();
 
@@ -702,8 +724,9 @@ function invertSelection(): void {
 
 /**
  * Resets the model currently selected in Edit mode: reassembles its parts
- * (undoing explode and hidden pieces), restores its
- * original pose and scale, and resets the rig rotation and perceived scale.
+ * (undoing explode and hidden pieces), restores its scale, resets the rig
+ * rotation and perceived scale, and puts every placed model back where it
+ * was placed.
  */
 function resetSelectedModel(): void {
     const model = editMode.selectedModel;
@@ -733,7 +756,8 @@ function resetSelectedModel(): void {
     });
 
     const previousRigScale = rigScale;
-    const previousRigAngle = sceneRotator.getAngle();
+    const previousSceneTransform = sceneRotator.getTransform();
+    const previousModelPoses = snapshotModelPoses();
     const previousExplodeFactor = inspectMode.getExplodeFactor();
 
     doResetModel(model);
@@ -752,12 +776,11 @@ function resetSelectedModel(): void {
                 mesh.visible = t.visible;
             }
 
-            sceneRotator.setAngle(previousRigAngle, xrRig, placedModels);
+            restoreModelPoses(previousModelPoses);
+            sceneRotator.setTransform(previousSceneTransform, xrRig);
             updateRigScale(previousRigScale);
             editMode.setPerceivedScale(1 / previousRigScale);
             inspectMode.setExplodeFactor(previousExplodeFactor);
-
-            sceneRotator.refresh(xrRig, placedModels);
             editMode.selectModel(model);
         },
         redo: () => {
@@ -831,6 +854,32 @@ function prepareExplode(model: THREE.Object3D): void {
     });
 
     model.userData.explodePrepared = true;
+}
+
+/**
+ * Scene pose of a placed model's shadow receiver: on the real surface it was
+ * placed on, right under where the model currently appears. The scene is
+ * rotated by moving the rig, so the surface must be mapped back through it,
+ * or it would turn (and tilt) with the models instead of staying on the table.
+ */
+function shadowSurfacePose(model: THREE.Object3D): ShadowSurfacePose {
+    const { surfacePosition, surfaceRotation } = model.userData as PhysicalPose;
+    if (!surfacePosition || !surfaceRotation) {
+        return { position: model.position, quaternion: model.quaternion };
+    }
+
+    // Where the model appears in the real world, projected onto the surface.
+    xrRig.updateMatrix();
+    const apparent = model.position.clone().applyMatrix4(xrRig.matrix.clone().invert());
+    const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(surfaceRotation);
+    apparent.addScaledVector(normal, -normal.dot(apparent.clone().sub(surfacePosition)));
+
+    const pose: ShadowSurfacePose = {
+        position: new THREE.Vector3(),
+        quaternion: new THREE.Quaternion(),
+    };
+    realToScene(xrRig, apparent, surfaceRotation, pose.position, pose.quaternion);
+    return pose;
 }
 
 /**
@@ -913,10 +962,10 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             if (pose && !spatialMappingOverlay.isComplete) {
                 // Still mapping: show where the surface is, but hold the ghost
                 // preview until the surface has stabilized.
-                placementOverlay.updateReticle(posePosition, poseRotation, rigScale, true);
+                placementOverlay.updateReticle(posePosition, poseRotation, xrRig, true);
                 if (previewModel) previewModel.visible = false;
             } else if (pose && placementArmed && previewModel) {
-                const inRange = placementOverlay.updateReticle(posePosition, poseRotation, rigScale);
+                const inRange = placementOverlay.updateReticle(posePosition, poseRotation, xrRig);
 
                 previewModel.userData.physicalPosition = posePosition.clone();
                 previewModel.userData.physicalRotation = poseRotation.clone();
@@ -926,9 +975,8 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
                 previewModel.visible = inRange;
 
                 if (inRange) {
-                    // Apply the rigScale to the position
-                    previewModel.position.copy(posePosition).multiplyScalar(rigScale);
-                    previewModel.quaternion.copy(poseRotation);
+                    // Map the real hit pose through the rig (scale and rotation)
+                    realToScene(xrRig, posePosition, poseRotation, previewModel.position, previewModel.quaternion);
 
                     // Set scale from currentScaleMatrix (auto-fit scale)
                     const modelScale = new THREE.Vector3();
@@ -947,6 +995,12 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             spatialMappingOverlay.updateWebXR(hasSurface);
         }
     }
+    // Receivers are anchored to the real world: they follow every rig change
+    // (rotation, scale, undo), cheaply, for the handful of placed models.
+    for (const model of placedModels) {
+        shadowSystem.updateSurface(model, shadowSurfacePose(model));
+    }
+
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {

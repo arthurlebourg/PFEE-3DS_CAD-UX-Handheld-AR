@@ -16,6 +16,21 @@ export interface PinchState {
      * linear factor, for the exploded view.
      */
     deltaNormalized: number;
+    /**
+     * Engagement-gated components, for direct manipulation. Each stays neutral
+     * until its own threshold is crossed, then counts from that point, so a
+     * pinch doesn't drift the rotation and vice versa. Zoom and twist may run
+     * together; a tilt locks both out (and is locked out by them).
+     */
+    /** Distance ratio since the zoom engaged; 1 until then. */
+    zoomRatio: number;
+    /** Finger-pair rotation since the twist engaged, counter-clockwise on screen, in radians. */
+    twist: number;
+    /**
+     * Vertical travel of both fingers since the tilt engaged, as a fraction of
+     * the short screen edge; positive downwards.
+     */
+    tilt: number;
 }
 
 export interface InteractionMode {
