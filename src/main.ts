@@ -10,6 +10,7 @@ import { JoystickWidget } from './ui/joystickWidget.js';
 import { PickHelper } from './scene/picking.js';
 import { SceneRotator } from './scene/sceneRotator.js';
 import { ShadowSystem } from './scene/shadowSystem.js';
+import { ModelRecenterer } from './scene/recenter.js';
 import { GestureRecognizer } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
 import { EditMode } from './modes/editMode.js';
@@ -53,8 +54,6 @@ let devModel: THREE.Object3D | null = null;
 
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
-/** Surface under the screen center (reference space), or null when none is usable. */
-let centerSurfacePose: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
 
 let devTick: (() => void) | null = null;
 
@@ -64,6 +63,7 @@ let pickHelper: PickHelper;
 let hierarchySlider: HierarchySlider;
 let perf: PerfProbe;
 let shadowSystem: ShadowSystem;
+let recenterer: ModelRecenterer;
 
 let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
@@ -145,7 +145,7 @@ function init(): void {
             onModelSelect: (modelName) => loadModel(modelName),
             onDelete: () => deleteSelectedModel(),
             onReset: () => resetSelectedModel(),
-            onRecenter: () => recenterModel(),
+            onRecenter: () => recenterer.recenter(),
             onInvertSelection: () => invertSelection(),
             onUndo: () => historyManager.undo(),
             onRedo: () => historyManager.redo(),
@@ -271,6 +271,22 @@ function init(): void {
         onAction: (action) => {
             historyManager.push('inspect', action);
         },
+    });
+
+    recenterer = new ModelRecenterer({
+        xrRig,
+        camera,
+        getTarget: () => getRecenterTarget(),
+        onPoseChanged: (model) => {
+            model.userData.physicalPosition = model.position.clone().divideScalar(rigScale);
+            model.userData.physicalRotation = model.quaternion.clone();
+            shadowSystem.updateSurface(model, {
+                position: model.position,
+                quaternion: model.quaternion,
+            });
+            sceneRotator.refresh(xrRig, placedModels);
+        },
+        onAction: (action) => historyManager.push('inspect', action),
     });
 
     modeManager = new ModeManager(editMode, inspectMode, (mode) => {
@@ -781,61 +797,6 @@ function getRecenterTarget(): THREE.Object3D | null {
 }
 
 /**
- * Moves the Recenter target onto the surface under the screen center, turned
- * to face the camera. Unlike Reset, the model keeps its current scale.
- */
-function recenterModel(): void {
-    const model = getRecenterTarget();
-    if (!model || !centerSurfacePose) return;
-
-    // The hit pose is in reference space, i.e. the rig's local frame.
-    xrRig.updateMatrixWorld();
-    const worldPos = centerSurfacePose.position.clone().applyMatrix4(xrRig.matrixWorld);
-    const surfaceQuat = xrRig.quaternion.clone().multiply(centerSurfacePose.quaternion);
-
-    // Yaw about the surface normal so the model's front (+Z) faces the camera.
-    const toCamera = camera.getWorldPosition(new THREE.Vector3())
-        .sub(worldPos)
-        .applyQuaternion(surfaceQuat.clone().invert());
-    const yaw = Math.atan2(toCamera.x, toCamera.z);
-    const newQuat = surfaceQuat.clone().multiply(
-        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
-    );
-
-    const pose = model.userData as PhysicalPose;
-    const prevPos = model.position.clone();
-    const prevQuat = model.quaternion.clone();
-    const prevPhysicalPos = pose.physicalPosition?.clone();
-    const prevPhysicalRot = pose.physicalRotation?.clone();
-
-    const applyPose = (
-        position: THREE.Vector3,
-        quaternion: THREE.Quaternion,
-        physicalPosition: THREE.Vector3 | undefined,
-        physicalRotation: THREE.Quaternion | undefined,
-    ): void => {
-        model.position.copy(position);
-        model.quaternion.copy(quaternion);
-        pose.physicalPosition = physicalPosition?.clone();
-        pose.physicalRotation = physicalRotation?.clone();
-        shadowSystem.updateSurface(model, {
-            position: model.position,
-            quaternion: model.quaternion,
-        });
-        sceneRotator.refresh(xrRig, placedModels);
-    };
-
-    const newPhysicalPos = worldPos.clone().divideScalar(rigScale);
-    applyPose(worldPos, newQuat, newPhysicalPos, newQuat);
-
-    historyManager.push('inspect', {
-        description: 'Recentrer modèle',
-        undo: () => applyPose(prevPos, prevQuat, prevPhysicalPos, prevPhysicalRot),
-        redo: () => applyPose(worldPos, newQuat, newPhysicalPos, newQuat),
-    });
-}
-
-/**
  * Applies an exploded-view offset to every placed (and, in dev mode, the dev)
  * model. A factor of 0 restores the assembled pose; higher factors push each
  * part radially outward from its own model's center.
@@ -941,7 +902,7 @@ function onWindowResize(): void {
 function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
     devTick?.();
-    centerSurfacePose = null;
+    recenterer.setSurface(null);
 
     if (isDevMode && spatialMappingOverlay) {
         spatialMappingOverlay.updateDev(camera);
@@ -978,10 +939,9 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             }
 
             // The hit-test ray is cast from the viewer, i.e. through the screen center.
-            centerSurfacePose =
-                pose && spatialMappingOverlay.isComplete && posePosition.length() <= MAX_PLACEMENT_DISTANCE
-                    ? { position: posePosition, quaternion: poseRotation }
-                    : null;
+            if (pose && spatialMappingOverlay.isComplete && posePosition.length() <= MAX_PLACEMENT_DISTANCE) {
+                recenterer.setSurface({ position: posePosition, quaternion: poseRotation });
+            }
 
             const placementArmed =
                 modeManager.currentName === 'edit' && editMode.isArmed;
@@ -1022,7 +982,7 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             spatialMappingOverlay.updateWebXR(hasSurface);
         }
     }
-    uiManager.setRecenterEnabled(centerSurfacePose !== null && getRecenterTarget() !== null);
+    uiManager.setRecenterEnabled(recenterer.canRecenter);
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {
