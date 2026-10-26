@@ -11,8 +11,8 @@ type MaterialBackup = { mesh: THREE.Mesh; material: THREE.Material | THREE.Mater
 const PICK_LAYER = 1;
 
 /**
- * Opacity of a model's other pieces while the slider widens the selection to a
- * sub-assembly: almost invisible, just enough to keep the outline in context.
+ * Opacity of a model's other pieces while the granularity slider is up, from
+ * its first step: almost invisible, just enough to keep the outline in context.
  */
 const DIM_OPACITY = 0.06;
 
@@ -46,6 +46,8 @@ export class PickHelper {
     private activeStep: AssemblyStep | null = null;
     /** Meshes currently faded around a sub-assembly selection (see updateContextDimming). */
     private dimmedMeshes = new Set<THREE.Mesh>();
+    /** Set by Inspect selections (taps, slider steps); cleared when the slider closes. */
+    private dimContext = false;
 
     private pickCamera = new THREE.PerspectiveCamera();
 
@@ -286,6 +288,7 @@ export class PickHelper {
                 this.selectedMeshes.push(mesh);
                 this.highlightMesh(mesh);
             }
+            this.dimContext = true;
             this.updateContextDimming();
         }
     }
@@ -336,6 +339,7 @@ export class PickHelper {
         }
         this.selectedMeshes = [];
         this.activeStep = null;
+        this.dimContext = false;
         this.updateContextDimming();
     }
 
@@ -406,6 +410,7 @@ export class PickHelper {
             this.highlightMesh(mesh);
         }
         this.activeStep = step;
+        this.dimContext = true;
         this.updateContextDimming();
     }
 
@@ -416,20 +421,20 @@ export class PickHelper {
      */
     public clearContextDimming(): void {
         this.activeStep = null;
+        this.dimContext = false;
         this.updateContextDimming();
     }
 
     /**
-     * Fades a model's other pieces while the slider has widened the selection
-     * to a sub-assembly (a 'subtree' step), so what the level covers reads at a
-     * glance; the piece level and plain taps leave the scene as is. Only the
-     * model holding the selection is touched. Runs on selection changes, never
-     * per frame.
+     * Fades a model's other pieces while an Inspect selection holds the slider
+     * up, from its first step (the piece alone) to the whole model, so what is
+     * selected reads at a glance. Only the model holding the selection is
+     * touched. Runs on selection changes, never per frame.
      */
     private updateContextDimming(): void {
         const next = new Set<THREE.Mesh>();
-        const step = this.activeStep;
-        const root = step?.scope === 'subtree' ? this.rootOf(step.node) : null;
+        const anchor = this.activeStep?.node ?? this.selectedMeshes[0];
+        const root = this.dimContext && this.selectedMeshes.length > 0 && anchor ? this.rootOf(anchor) : null;
         if (root) {
             const selected = new Set(this.selectedMeshes);
             root.traverse((child) => {
