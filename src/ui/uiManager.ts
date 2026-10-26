@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark } from 'lucide';
+import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark, LocateFixed } from 'lucide';
 import type { ModeName } from '../modes/interactionMode.js';
 
 export interface UIManagerCallbacks {
@@ -15,6 +15,8 @@ export interface UIManagerCallbacks {
     onReset: () => void;
     /** Invert piece selection in Inspect mode. */
     onInvertSelection?: () => void;
+    /** Inspect mode: move the active model onto the surface at the screen center. */
+    onRecenter?: () => void;
     /** Undo the last action in the active mode. */
     onUndo: () => void;
     /** Redo the last undone action in the active mode. */
@@ -62,8 +64,9 @@ export class UIManager {
     private btnDelete = document.createElement('button');
     private btnReset = document.createElement('button');
 
-    // Contextual button, shown in Inspect mode
+    // Contextual buttons, shown in Inspect mode
     private btnInvert = document.createElement('button');
+    private btnRecenter = document.createElement('button');
     // History buttons (Undo / Redo)
     private historyContainer = document.createElement('div');
     private btnUndo = document.createElement('button');
@@ -128,6 +131,12 @@ export class UIManager {
         this.btnInvert.setAttribute('title', 'Inverser la sélection');
         this.btnInvert.setAttribute('aria-label', 'Inverser la sélection');
         this.btnInvert.innerHTML = `<i data-lucide="flip-horizontal"></i>`;
+
+        // Contextual Recenter button (shown in Inspect mode, disabled without a surface)
+        this.btnRecenter.className = 'ar-recenter-btn disabled';
+        this.btnRecenter.setAttribute('title', 'Recentrer');
+        this.btnRecenter.setAttribute('aria-label', 'Recentrer');
+        this.btnRecenter.innerHTML = `<i data-lucide="locate-fixed"></i>`;
         // History buttons (Undo / Redo)
         this.historyContainer.className = 'ar-history-container';
         this.historyContainer.style.display = 'none';
@@ -179,6 +188,11 @@ export class UIManager {
         this.addPointerDownListener(this.btnDelete, () => this.callbacks.onDelete());
         this.addPointerDownListener(this.btnReset,  () => this.callbacks.onReset());
         this.addPointerDownListener(this.btnInvert, () => this.callbacks.onInvertSelection?.());
+        this.addPointerDownListener(this.btnRecenter, () => {
+            if (!this.btnRecenter.classList.contains('disabled')) {
+                this.callbacks.onRecenter?.();
+            }
+        });
         this.addPointerDownListener(this.btnUndo,   () => {
             if (!this.btnUndo.classList.contains('disabled')) {
                 this.callbacks.onUndo();
@@ -200,6 +214,7 @@ export class UIManager {
         this.btnDelete.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnReset.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnInvert.addEventListener('beforexrselect', (e) => e.preventDefault());
+        this.btnRecenter.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.historyContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnUndo.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.btnRedo.addEventListener('beforexrselect', (e) => e.preventDefault());
@@ -225,6 +240,7 @@ export class UIManager {
         parent.appendChild(this.btnDelete);
         parent.appendChild(this.btnReset);
         parent.appendChild(this.btnInvert);
+        parent.appendChild(this.btnRecenter);
         parent.appendChild(this.historyContainer);
         parent.appendChild(this.btnHelp);
 
@@ -285,6 +301,16 @@ export class UIManager {
         this.btnRedo.classList.toggle('disabled', !canRedo);
     }
 
+    /**
+     * Enables/greys out the Recenter button. Called every frame, so the DOM
+     * is only touched when the state actually changes.
+     */
+    public setRecenterEnabled(enabled: boolean): void {
+        if (this.btnRecenter.classList.contains('disabled') !== enabled) return;
+        this.btnRecenter.classList.toggle('disabled', !enabled);
+        this.btnRecenter.setAttribute('aria-disabled', String(!enabled));
+    }
+
     public toggleVisibility(show: boolean): void {
         this.quickContainer.style.display = show ? 'flex' : 'none';
         this.historyContainer.style.display = show ? 'flex' : 'none';
@@ -300,6 +326,7 @@ export class UIManager {
             this.btnDelete.classList.remove('visible');
             this.btnReset.classList.remove('visible');
             this.btnInvert.classList.remove('visible');
+            this.btnRecenter.classList.remove('visible');
             this.showPickingColors = false;
             this.showPerf = false;
             this.updateUI();
@@ -316,7 +343,7 @@ export class UIManager {
         createIcons({
             icons: {
                 Settings, Layers, Eye, Activity, Pencil,
-                Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark,
+                Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark, LocateFixed,
             }
         });
     }
@@ -414,9 +441,10 @@ export class UIManager {
             card.classList.toggle('active', card.getAttribute('data-model') === this.activeModelName);
         });
 
-        // Invert button: visible in inspect mode when UI is active
+        // Invert/Recenter buttons: visible in inspect mode when UI is active
         const isSessionActive = this.quickContainer.style.display !== 'none';
         this.btnInvert.classList.toggle('visible', isSessionActive && this.mode === 'inspect');
+        this.btnRecenter.classList.toggle('visible', isSessionActive && this.mode === 'inspect');
 
         // The mode button was just rewritten as a bare <i data-lucide> placeholder,
         // which draws nothing until Lucide swaps it for an <svg>. Re-hydrating here
@@ -873,6 +901,59 @@ export class UIManager {
             }
 
             .ar-invert-btn svg {
+                width: 24px;
+                height: 24px;
+                stroke: currentColor;
+            }
+
+            /* Inspect mode only, so it reuses the slot of the (Edit-only) Reset button */
+            .ar-recenter-btn {
+                position: absolute;
+                bottom: 105px;
+                left: 30px;
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                border: 1px solid rgba(40, 167, 69, 0.4);
+                background: rgba(40, 167, 69, 0.25);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                color: #4ade80;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                box-shadow: 0 8px 32px 0 rgba(40, 167, 69, 0.2);
+                z-index: 1000;
+                opacity: 0;
+                transform: scale(0);
+                pointer-events: none;
+                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                outline: none;
+                padding: 0;
+            }
+
+            .ar-recenter-btn.visible {
+                opacity: 1;
+                transform: scale(1);
+                pointer-events: auto;
+            }
+
+            .ar-recenter-btn:not(.disabled):active {
+                transform: scale(0.9);
+                background: rgba(40, 167, 69, 0.45);
+                box-shadow: 0 0 15px rgba(40, 167, 69, 0.5);
+            }
+
+            /* Stays tappable so a tap on it never falls through to the scene */
+            .ar-recenter-btn.visible.disabled {
+                opacity: 0.4;
+                cursor: default;
+                filter: grayscale(1);
+                box-shadow: none;
+            }
+
+            .ar-recenter-btn svg {
                 width: 24px;
                 height: 24px;
                 stroke: currentColor;
