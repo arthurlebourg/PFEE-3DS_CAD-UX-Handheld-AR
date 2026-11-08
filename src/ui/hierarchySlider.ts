@@ -1,133 +1,225 @@
 import * as THREE from 'three';
+import type { AssemblyStep } from '../scene/assemblyTree.js';
+
+/** Rail line distance from the left edge (plus the safe area): clear of Android's back gesture. */
+const RAIL_X = 32;
+/** Touch zone: from 12 px left of the rail to 44 px inward, never reaching the edge. */
+const HIT_LEFT = RAIL_X - 12;
+const HIT_WIDTH = 56;
+/** Gap between two step dots; also the vertical touch target of each dot. */
+const DOT_SPACING = 48;
+/** Room above the top dot and below the bottom one, so end dots keep a full target. */
+const END_PAD = 22;
+/** The rail never grows taller than this share of the viewport. */
+const MAX_HEIGHT_RATIO = 0.6;
 
 /**
- * HierarchySlider: a Snap Map-style edge slider against the left screen edge
- * that lets the user step through the ancestor chain of the currently
- * selected model part (e.g. Window -> Door -> Shell -> Car). Discreet at
- * rest; on touch the rail widens and notches appear. Dragging is relative (no jump on touch-down), the
- * thumb follows the finger freely, ticks a haptic pulse on each level and
- * springs to the nearest notch on release. The GestureRecognizer ignores
- * touches starting on the track, so a drag never doubles as a scene gesture.
+ * HierarchySlider: a vertical rail near the left edge stepping through the
+ * granularity of the current Inspect selection, from the picked piece (bottom
+ * dot) up to the whole model (top dot), as built by the assembly tree.
+ *
+ * Shown while a piece is selected, hidden on deselection. A tap anywhere on
+ * the rail jumps to the nearest dot; dragging follows the finger and snaps to
+ * the dots. The touch zone starts 20 px from the edge, so a drag never begins
+ * where the system back gesture lives. The root keeps the
+ * `ar-hierarchy-slider` class, which the GestureRecognizer treats as UI.
+ *
+ * No label: the rail only shows how high the selection sits in the CAD
+ * hierarchy; screen readers get the step and its piece count.
+ *
+ * Tapping another piece keeps the current height: if the selection sits two
+ * steps above its piece, the new selection is the new piece's ancestor two
+ * steps up (bounded by the root).
  */
 export class HierarchySlider {
-    private track = document.createElement('div');
-    private thumb = document.createElement('div');
-    private ticks: HTMLDivElement[] = [];
+    private root = document.createElement('div');
+    private rail = document.createElement('div');
+    private handle = document.createElement('div');
+    private dots: HTMLDivElement[] = [];
 
-    private chain: THREE.Object3D[] = [];
-    private levelIndex = 0; // 0 = leaf (bottom of track), chain.length-1 = top ancestor
+    private steps: AssemblyStep[] = [];
+    private levelIndex = 0; // 0 = piece (bottom dot), steps.length - 1 = whole model
+    private trackLength = 0;
     private dragging = false;
-    private dragStartY = 0;
-    private dragStartRatio = 0;
 
-    private readonly onLevelChange: (node: THREE.Object3D, level: number) => void;
+    private readonly onLevelChange: (step: AssemblyStep, level: number) => void;
 
-    constructor(onLevelChange: (node: THREE.Object3D, level: number) => void) {
+    constructor(onLevelChange: (step: AssemblyStep, level: number) => void) {
         this.onLevelChange = onLevelChange;
         this.injectStyles();
 
-        this.track.className = 'ar-hierarchy-slider';
-        this.thumb.className = 'ar-hierarchy-thumb';
-        const knob = document.createElement('div');
-        knob.className = 'ar-hierarchy-knob';
-        this.thumb.appendChild(knob);
-        this.track.appendChild(this.thumb);
+        this.root.className = 'ar-hierarchy-slider';
+        this.root.tabIndex = 0;
+        this.root.setAttribute('role', 'slider');
+        this.root.setAttribute('aria-orientation', 'vertical');
+        this.root.setAttribute('aria-label', 'Granularité de la sélection');
+        this.root.setAttribute('aria-valuemin', '0');
+
+        this.rail.className = 'ar-hs-rail';
+        this.handle.className = 'ar-hs-handle';
+        this.root.append(this.rail, this.handle);
     }
 
     public attach(parent: HTMLElement): void {
-        parent.appendChild(this.track);
+        parent.appendChild(this.root);
 
-        this.track.addEventListener('pointerdown', (event) => {
-            if (this.chain.length < 2) return;
+        this.root.addEventListener('pointerdown', (event) => {
+            if (!event.isPrimary || this.steps.length < 2) return;
             event.stopPropagation();
             event.preventDefault();
 
             this.dragging = true;
-            this.dragStartY = event.clientY;
-            this.dragStartRatio = this.levelRatio(this.levelIndex);
-            this.track.classList.add('dragging');
-            this.track.setPointerCapture(event.pointerId);
-        }, { passive: false });
+            this.root.classList.add('dragging');
+            this.root.setPointerCapture(event.pointerId);
+            this.updateFromClientY(event.clientY);
+        });
 
-        this.track.addEventListener('pointermove', (event) => {
+        this.root.addEventListener('pointermove', (event) => {
             if (!this.dragging) return;
             event.stopPropagation();
             event.preventDefault();
             this.updateFromClientY(event.clientY);
-        }, { passive: false });
+        });
 
         const endDrag = (event: PointerEvent) => {
             if (!this.dragging) return;
             event.stopPropagation();
             this.dragging = false;
-            this.track.classList.remove('dragging');
-            this.setThumbRatio(this.levelRatio(this.levelIndex));
+            this.root.classList.remove('dragging');
+            this.placeHandle(this.dotY(this.levelIndex));
         };
-        this.track.addEventListener('pointerup', endDrag);
-        this.track.addEventListener('pointercancel', endDrag);
+        this.root.addEventListener('pointerup', endDrag);
+        this.root.addEventListener('pointercancel', endDrag);
 
-        this.track.addEventListener('beforexrselect', (event) => event.preventDefault());
+        this.root.addEventListener('keydown', (event) => this.onKeyDown(event));
+        this.root.addEventListener('beforexrselect', (event) => event.preventDefault());
+
+        // Orientation changes resize the viewport, hence the rail.
+        window.addEventListener('resize', () => {
+            if (this.steps.length > 0) this.layout();
+        });
     }
 
     /**
-     * Rebuilds the slider for a new ancestor chain (as produced by
-     * PickHelper.getSelectableAncestorChain). chain[0] is the leaf and
-     * becomes the bottom/initial level; the last entry is the topmost
-     * meaningful ancestor and becomes the top of the track. Hides itself
-     * when there's nothing to navigate (a single-level model).
+     * Shows the steps of a freshly picked piece. While the rail is already up,
+     * the current height is kept (bounded by the new chain) and re-applied, so
+     * the selection becomes the new piece's ancestor at that height.
      */
-    public setHierarchy(chain: THREE.Object3D[]): void {
-        this.chain = chain;
-        this.levelIndex = 0;
+    public setHierarchy(steps: AssemblyStep[]): void {
+        const wasVisible = this.steps.length > 0;
+        const level = wasVisible ? Math.min(this.levelIndex, steps.length - 1) : 0;
 
-        for (const tick of this.ticks) tick.remove();
-        this.ticks = chain.map((_, i) => {
-            const tick = document.createElement('div');
-            tick.className = 'ar-hierarchy-tick';
-            tick.style.top = `${(1 - this.levelRatio(i)) * 100}%`;
-            this.track.insertBefore(tick, this.thumb);
-            return tick;
+        this.steps = steps;
+        this.levelIndex = level;
+
+        for (const dot of this.dots) dot.remove();
+        this.dots = steps.map(() => {
+            const dot = document.createElement('div');
+            dot.className = 'ar-hs-dot';
+            this.root.insertBefore(dot, this.handle);
+            return dot;
         });
 
+        const flat = steps.length < 2;
+        this.root.classList.toggle('disabled', flat);
+        this.root.setAttribute('aria-disabled', String(flat));
+        this.root.setAttribute('aria-valuemax', String(Math.max(0, steps.length - 1)));
+        this.root.classList.add('visible');
+
+        this.layout();
         this.applyLevel();
-        this.setThumbRatio(0);
-        this.track.style.display = chain.length >= 2 ? 'block' : 'none';
-    }
 
-    /** Hides the slider and drops its hierarchy reference. */
-    public hide(): void {
-        this.chain = [];
-        this.levelIndex = 0;
-        this.track.style.display = 'none';
-    }
-
-    private updateFromClientY(clientY: number): void {
-        const height = this.track.getBoundingClientRect().height;
-        const ratio = THREE.MathUtils.clamp(this.dragStartRatio + (this.dragStartY - clientY) / height, 0, 1);
-        this.setThumbRatio(ratio);
-
-        const index = Math.round(ratio * (this.chain.length - 1));
-        if (index !== this.levelIndex) {
-            this.levelIndex = index;
-            this.applyLevel();
-            navigator.vibrate?.(8);
-            this.onLevelChange(this.chain[this.levelIndex], this.levelIndex);
+        if (level > 0) {
+            this.onLevelChange(steps[level], level);
         }
     }
 
+    /** Hides the rail and forgets the chain and its height. */
+    public hide(): void {
+        this.steps = [];
+        this.levelIndex = 0;
+        this.dragging = false;
+        this.root.classList.remove('visible', 'dragging');
+    }
+
+    // -------------------------------------------------------------------------
+    // Layout
+    // -------------------------------------------------------------------------
+
+    private layout(): void {
+        const gaps = Math.max(1, this.steps.length - 1);
+        const maxTrack = window.innerHeight * MAX_HEIGHT_RATIO - 2 * END_PAD;
+        this.trackLength = this.steps.length < 2 ? 0 : Math.min(DOT_SPACING * gaps, maxTrack);
+
+        this.root.style.height = `${this.trackLength + 2 * END_PAD}px`;
+        this.dots.forEach((dot, i) => {
+            dot.style.top = `${this.dotY(i)}px`;
+        });
+        this.placeHandle(this.dotY(this.levelIndex));
+    }
+
+    /** Dot centre, from the top of the root: step 0 at the bottom. */
+    private dotY(index: number): number {
+        const gaps = this.steps.length - 1;
+        return END_PAD + (gaps > 0 ? (1 - index / gaps) * this.trackLength : 0);
+    }
+
+    private placeHandle(y: number): void {
+        this.handle.style.top = `${y}px`;
+    }
+
+    // -------------------------------------------------------------------------
+    // Interaction
+    // -------------------------------------------------------------------------
+
+    private updateFromClientY(clientY: number): void {
+        const top = this.root.getBoundingClientRect().top;
+        const y = THREE.MathUtils.clamp(clientY - top, END_PAD, END_PAD + this.trackLength);
+        this.placeHandle(y);
+
+        const ratio = this.trackLength > 0 ? 1 - (y - END_PAD) / this.trackLength : 0;
+        this.setLevel(Math.round(ratio * (this.steps.length - 1)));
+    }
+
+    private onKeyDown(event: KeyboardEvent): void {
+        if (this.steps.length < 2) return;
+
+        let next: number;
+        switch (event.key) {
+            case 'ArrowUp': case 'ArrowRight': next = this.levelIndex + 1; break;
+            case 'ArrowDown': case 'ArrowLeft': next = this.levelIndex - 1; break;
+            case 'Home': next = 0; break;
+            case 'End': next = this.steps.length - 1; break;
+            default: return;
+        }
+        event.preventDefault();
+        this.setLevel(THREE.MathUtils.clamp(next, 0, this.steps.length - 1));
+        this.placeHandle(this.dotY(this.levelIndex));
+    }
+
+    private setLevel(index: number): void {
+        if (index === this.levelIndex) return;
+        this.levelIndex = index;
+        this.applyLevel();
+        navigator.vibrate?.(8);
+        this.onLevelChange(this.steps[index], index);
+    }
+
     private applyLevel(): void {
-        this.ticks.forEach((tick, i) => tick.classList.toggle('active', i === this.levelIndex));
+        this.dots.forEach((dot, i) => dot.classList.toggle('active', i === this.levelIndex));
+        if (!this.dragging) this.placeHandle(this.dotY(this.levelIndex));
+
+        const step = this.steps[this.levelIndex];
+        const text = this.steps.length < 2
+            ? 'Pas de sous-ensembles dans ce modèle'
+            : `Niveau ${this.levelIndex + 1} sur ${this.steps.length}, ${step.pieces} pièce${step.pieces > 1 ? 's' : ''}`;
+        this.root.setAttribute('aria-valuenow', String(this.levelIndex));
+        this.root.setAttribute('aria-valuetext', text);
     }
 
-    private levelRatio(index: number): number {
-        const levels = this.chain.length;
-        return levels > 1 ? index / (levels - 1) : 0;
-    }
-
-    private setThumbRatio(ratio: number): void {
-        // Thumb travels from bottom (leaf, 0) to top (highest ancestor, 1).
-        this.thumb.style.top = `${(1 - ratio) * 100}%`;
-    }
+    // -------------------------------------------------------------------------
+    // CSS injection
+    // -------------------------------------------------------------------------
 
     private injectStyles(): void {
         const styleId = 'ar-hierarchy-slider-styles';
@@ -135,72 +227,72 @@ export class HierarchySlider {
 
         const style = document.createElement('style');
         style.id = styleId;
+        // Same look as the model picker: dark, flat, one accent for the active step.
         style.textContent = `
             .ar-hierarchy-slider {
                 position: fixed;
-                left: 0;
-                top: 18vh;
-                bottom: 18vh;
-                width: 36px;
+                left: calc(${HIT_LEFT}px + env(safe-area-inset-left, 0px));
+                top: 50%;
+                width: ${HIT_WIDTH}px;
+                transform: translateY(-50%);
                 z-index: 900;
                 display: none;
                 touch-action: none;
                 pointer-events: auto;
+                outline: none;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             }
-            .ar-hierarchy-slider::before {
-                content: '';
+            .ar-hierarchy-slider.visible { display: block; }
+            .ar-hierarchy-slider:focus-visible .ar-hs-handle { box-shadow: 0 0 0 3px #fff; }
+
+            .ar-hs-rail {
                 position: absolute;
-                left: 12px;
-                top: 0;
-                bottom: 0;
-                width: 4px;
-                border-radius: 2px;
-                background: rgba(255, 255, 255, 0.25);
-                box-shadow: 0 0 6px rgba(0, 0, 0, 0.35);
+                left: ${RAIL_X - HIT_LEFT}px;
+                top: ${END_PAD}px;
+                bottom: ${END_PAD}px;
+                width: 2px;
+                border-radius: 1px;
+                background: rgba(255, 255, 255, 0.3);
+                box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
                 transform: translateX(-50%);
-                transition: width 0.2s, background 0.2s;
+                pointer-events: none;
             }
-            .ar-hierarchy-slider.dragging::before {
+
+            .ar-hs-dot {
+                position: absolute;
+                left: ${RAIL_X - HIT_LEFT}px;
                 width: 8px;
-                background: rgba(255, 255, 255, 0.45);
-            }
-            .ar-hierarchy-tick {
-                position: absolute;
-                left: 12px;
-                width: 4px;
-                height: 4px;
+                height: 8px;
                 border-radius: 50%;
-                background: rgba(255, 255, 255, 0.9);
-                transform: translate(-50%, -50%) scale(0);
-                transition: transform 0.2s;
+                background: rgba(255, 255, 255, 0.6);
+                box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+                transform: translate(-50%, -50%);
                 pointer-events: none;
             }
-            .ar-hierarchy-slider.dragging .ar-hierarchy-tick {
-                transform: translate(-50%, -50%) scale(1);
-            }
-            .ar-hierarchy-thumb {
+            .ar-hs-dot.active { background: #007bff; }
+
+            .ar-hs-handle {
                 position: absolute;
-                left: 12px;
-                width: 0;
-                height: 0;
-                pointer-events: none;
-                transition: top 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-            }
-            .ar-hierarchy-slider.dragging .ar-hierarchy-thumb {
-                transition: none;
-            }
-            .ar-hierarchy-knob {
-                position: absolute;
-                width: 16px;
-                height: 16px;
+                left: ${RAIL_X - HIT_LEFT}px;
+                width: 22px;
+                height: 22px;
+                box-sizing: border-box;
                 border-radius: 50%;
-                background: #fff;
+                border: 2px solid #007bff;
+                background: rgba(18, 18, 18, 0.92);
                 box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
                 transform: translate(-50%, -50%);
-                transition: transform 0.18s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                transition: top 0.15s ease-out;
+                pointer-events: none;
             }
-            .ar-hierarchy-slider.dragging .ar-hierarchy-knob {
-                transform: translate(-50%, -50%) scale(1.5);
+            .ar-hierarchy-slider.dragging .ar-hs-handle { transition: none; }
+
+            .ar-hierarchy-slider.disabled .ar-hs-rail,
+            .ar-hierarchy-slider.disabled .ar-hs-dot { display: none; }
+            .ar-hierarchy-slider.disabled .ar-hs-handle { border-color: rgba(255, 255, 255, 0.3); }
+
+            @media (prefers-reduced-motion: reduce) {
+                .ar-hs-handle { transition: none; }
             }
         `;
         document.head.appendChild(style);

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { InteractionMode, PinchState } from './interactionMode.js';
 import { clamp } from './interactionMode.js';
 import type { PickHelper } from '../scene/picking.js';
+import type { AssemblyStep } from '../scene/assemblyTree.js';
 import type { HistoryAction } from '../history/historyManager.js';
 
 interface InspectModeDeps {
@@ -11,7 +12,7 @@ interface InspectModeDeps {
     /** Drives the exploded view; 0 = assembled. */
     onExplode(factor: number): void;
     /** Opens the granularity slider on a freshly picked piece's ancestor chain. */
-    showGranularity(chain: THREE.Object3D[]): void;
+    showGranularity(chain: AssemblyStep[]): void;
     /** Closes the granularity slider: nothing is selected any more. */
     hideGranularity(): void;
     /** Pushes an undoable action to the inspect history stack. */
