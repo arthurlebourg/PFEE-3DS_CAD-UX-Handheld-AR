@@ -1,8 +1,9 @@
 /**
  * Animated gesture glyphs for the tutorial and the cheat sheet.
  *
- * Text cannot teach "hold one second, then drag" — the delay is the whole
- * point of the gesture and prose hides it. These loops show it.
+ * Text cannot teach "twist two fingers" or "drag two fingers together" —
+ * the motion is the whole point of the gesture and prose hides it. These
+ * loops show it.
  *
  * Everything animates through CSS keyframes on transform / opacity /
  * stroke-dashoffset only: the test tablet is already pinned at ~30 fps by its
@@ -10,7 +11,7 @@
  * the frame budget.
  */
 
-export type GlyphName = 'tap' | 'double-tap' | 'hold-drag' | 'pinch' | 'slide-y' | 'ui-tap' | 'check';
+export type GlyphName = 'tap' | 'double-tap' | 'twist' | 'tilt' | 'pinch' | 'slide-y' | 'ui-tap' | 'check';
 
 /** Inline SVG markup for a glyph, inheriting the card's accent via currentColor. */
 export function glyphSvg(name: GlyphName): string {
@@ -28,13 +29,22 @@ export function glyphSvg(name: GlyphName): string {
                 <circle class="ar-tg-dot" cx="32" cy="32" r="7"/>
             </svg>`;
 
-        case 'hold-drag':
+        case 'twist':
             return `<svg class="ar-tg" viewBox="0 0 64 64" aria-hidden="true">
-                <circle class="ar-tg-charge" cx="32" cy="32" r="15"/>
-                <g class="ar-tg-slide">
-                    <circle class="ar-tg-dot" cx="32" cy="32" r="7"/>
+                <path class="ar-tg-arrow" d="M14 22a21 21 0 0 1 12-9M50 42a21 21 0 0 1-12 9"/>
+                <g class="ar-tg-twist">
+                    <circle class="ar-tg-dot" cx="21" cy="32" r="7"/>
+                    <circle class="ar-tg-dot" cx="43" cy="32" r="7"/>
                 </g>
-                <path class="ar-tg-arrow" d="M9 32h5M50 32h5"/>
+            </svg>`;
+
+        case 'tilt':
+            return `<svg class="ar-tg" viewBox="0 0 64 64" aria-hidden="true">
+                <path class="ar-tg-arrow" d="M32 9v6M32 49v6"/>
+                <g class="ar-tg-tilt">
+                    <circle class="ar-tg-dot" cx="21" cy="32" r="7"/>
+                    <circle class="ar-tg-dot" cx="43" cy="32" r="7"/>
+                </g>
             </svg>`;
 
         case 'pinch':
@@ -105,23 +115,24 @@ export const GLYPH_STYLES = `
         100% { transform: scale(2.1); opacity: 0; }
     }
 
-    /* Hold: the ring draws over the first second, then the finger slides. */
-    .ar-tg-charge {
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 3;
-        opacity: 0.5;
-        transform: rotate(-90deg);
-        stroke-dasharray: 95;
-        stroke-dashoffset: 95;
-        animation: ar-tg-charge 2.8s linear infinite;
+    /* Twist: the finger pair turns around its midpoint, both ways. */
+    .ar-tg-twist { animation: ar-tg-twist 2.8s ease-in-out infinite; }
+
+    @keyframes ar-tg-twist {
+        0%, 10%  { transform: rotate(0deg); }
+        40%, 55% { transform: rotate(40deg); }
+        85%      { transform: rotate(-40deg); }
+        100%     { transform: rotate(0deg); }
     }
 
-    @keyframes ar-tg-charge {
-        0%   { stroke-dashoffset: 95; opacity: 0.5; }
-        32%  { stroke-dashoffset: 0; opacity: 0.5; }
-        88%  { stroke-dashoffset: 0; opacity: 0.5; }
-        100% { stroke-dashoffset: 0; opacity: 0; }
+    /* Tilt: both fingers travel up, then down, together. */
+    .ar-tg-tilt { animation: ar-tg-tilt 2.8s ease-in-out infinite; }
+
+    @keyframes ar-tg-tilt {
+        0%, 10%  { transform: translateY(0); }
+        40%, 55% { transform: translateY(-12px); }
+        85%      { transform: translateY(12px); }
+        100%     { transform: translateY(0); }
     }
 
     /* Granularity: the thumb climbs the rail, notch by notch. */
@@ -141,15 +152,6 @@ export const GLYPH_STYLES = `
         0%, 10%   { transform: translateY(0); }
         45%, 70%  { transform: translateY(-36px); }
         100%      { transform: translateY(0); }
-    }
-
-    .ar-tg-slide { animation: ar-tg-slide 2.8s ease-in-out infinite; }
-
-    @keyframes ar-tg-slide {
-        0%, 32% { transform: translateX(0); }
-        56%     { transform: translateX(11px); }
-        82%     { transform: translateX(-11px); }
-        100%    { transform: translateX(0); }
     }
 
     .ar-tg-arrow {
@@ -197,6 +199,6 @@ export const GLYPH_STYLES = `
     @media (prefers-reduced-motion: reduce) {
         .ar-tg * { animation: none !important; }
         .ar-tg-ripple { opacity: 0.5; }
-        .ar-tg-charge, .ar-tg-check { stroke-dashoffset: 0; }
+        .ar-tg-check { stroke-dashoffset: 0; }
     }
 `;

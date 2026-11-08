@@ -27,14 +27,19 @@ const CHEATSHEET: Record<ModeName, CheatItem[]> = {
             effect: 'Poser le modèle armé, ou sélectionner un modèle déjà posé.',
         },
         {
-            glyph: 'hold-drag',
-            gesture: 'Maintenir 1 s, puis glisser',
-            effect: 'Un joystick apparaît : faites tourner la scène horizontalement.',
-        },
-        {
             glyph: 'pinch',
             gesture: 'Pincer à deux doigts',
             effect: "Ajuster l'échelle perçue de la scène, de 10 % à 1000 %.",
+        },
+        {
+            glyph: 'twist',
+            gesture: 'Tourner à deux doigts',
+            effect: 'Faire pivoter la scène autour de la verticale.',
+        },
+        {
+            glyph: 'tilt',
+            gesture: 'Glisser deux doigts vers le haut ou le bas',
+            effect: 'Incliner la scène, jusqu’à 90°.',
         },
     ],
     inspect: [
