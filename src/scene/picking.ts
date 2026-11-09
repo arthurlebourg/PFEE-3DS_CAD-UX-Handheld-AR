@@ -20,6 +20,19 @@ const DIM_OPACITY = 0.06;
 type DimBackup = { transparent: boolean; opacity: number; depthWrite: boolean };
 
 /**
+ * Placed copies of a model share its materials (Object3D.clone keeps them),
+ * so a mesh gets its own copy before any per-piece change (highlight, dim,
+ * fade).
+ */
+export function isolateMaterial(mesh: THREE.Mesh): void {
+    if (mesh.userData.isolatedMaterial) return;
+    mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map((material) => material.clone())
+        : mesh.material.clone();
+    mesh.userData.isolatedMaterial = true;
+}
+
+/**
  * PickHelper: GPU colour picking via in-place material swapping.
  *
  * Each registered mesh is briefly swapped to a flat id-colour material and the
@@ -46,7 +59,7 @@ export class PickHelper {
     private activeStep: AssemblyStep | null = null;
     /** Meshes currently faded around a sub-assembly selection (see updateContextDimming). */
     private dimmedMeshes = new Set<THREE.Mesh>();
-    /** Set by Inspect selections (taps, slider steps); cleared when the slider closes. */
+    /** Set by piece selections (taps, slider steps); cleared when the slider closes. */
     private dimContext = false;
 
     private pickCamera = new THREE.PerspectiveCamera();
@@ -168,22 +181,33 @@ export class PickHelper {
     }
 
     /**
-     * Renders the scene off-screen with id-colour materials and reads back the
-     * pixel under the tap to identify the clicked mesh.
+     * Picks the mesh under an XR screen tap (its gamepad axes hold the tap in
+     * normalized device coordinates).
      */
     public pickXR(inputSource: XRInputSource | undefined, renderer: THREE.WebGLRenderer, scene: THREE.Scene, probe?: PerfProbe): THREE.Mesh | null {
         const axes = inputSource?.gamepad?.axes;
         if (inputSource?.targetRayMode !== 'screen' || !axes || axes.length < 2) {
             return null;
         }
+        return this.pickAt(axes[0], axes[1], renderer, scene, probe);
+    }
+
+    /**
+     * Renders the scene off-screen with id-colour materials and reads back the
+     * pixel at (axisX, axisY) to identify the mesh drawn there. Used for touches
+     * that are not XR selects, such as the start of a drag.
+     *
+     * The point uses the XR screen-input axes convention: both in [-1, 1],
+     * with Y pointing *down* (top of the screen = -1), unlike NDC.
+     */
+    public pickAt(axisX: number, axisY: number, renderer: THREE.WebGLRenderer, scene: THREE.Scene, probe?: PerfProbe): THREE.Mesh | null {
         if (this.idToMeshMap.size === 0) {
             return null;
         }
-        const ndcX = axes[0];
-        const ndcY = axes[1];
 
-        const px = Math.floor((ndcX * 0.5 + 0.5) * this.pickingTexture.width);
-        const py = Math.floor((0.5 - ndcY * 0.5) * this.pickingTexture.height);
+        // The render target's rows start at the bottom, hence the Y flip.
+        const px = Math.floor((axisX * 0.5 + 0.5) * this.pickingTexture.width);
+        const py = Math.floor((0.5 - axisY * 0.5) * this.pickingTexture.height);
 
         if (px < 0 || py < 0 || px >= this.pickingTexture.width || py >= this.pickingTexture.height) {
             return null;
@@ -294,31 +318,6 @@ export class PickHelper {
     }
 
     /**
-     * Highlights every mesh of a placed model, marking it as the selected
-     * model in Edit mode. Blue, to distinguish from the orange piece
-     * selection used in Inspect mode.
-     */
-    public highlightModel(model: THREE.Object3D, colorHex = 0x007bff): void {
-        model.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                this.highlightMesh(child as THREE.Mesh, colorHex);
-            }
-        });
-    }
-
-    /**
-     * Restores the original appearance of every mesh of a model highlighted
-     * by {@link highlightModel}.
-     */
-    public unhighlightModel(model: THREE.Object3D): void {
-        model.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                this.removeHighlight(child as THREE.Mesh);
-            }
-        });
-    }
-
-    /**
      * Removes a single mesh from the selection,
      * restoring its original material.
      */
@@ -415,8 +414,8 @@ export class PickHelper {
     }
 
     /**
-     * Ends the sub-assembly context when the slider closes (leaving Inspect
-     * mode, or the selection emptied): the selection stays, unfaded, and no
+     * Ends the sub-assembly context when the slider closes (the selection
+     * emptied): the selection stays, unfaded, and no
      * longer counts as a granularity step.
      */
     public clearContextDimming(): void {
@@ -426,7 +425,7 @@ export class PickHelper {
     }
 
     /**
-     * Fades a model's other pieces while an Inspect selection holds the slider
+     * Fades a model's other pieces while a piece selection holds the slider
      * up, from its first step (the piece alone) to the whole model, so what is
      * selected reads at a glance. Only the model holding the selection is
      * touched. Runs on selection changes, never per frame.
@@ -459,7 +458,7 @@ export class PickHelper {
      * all but invisible piece would otherwise still cast.
      */
     private dimMesh(mesh: THREE.Mesh): void {
-        this.isolateMaterial(mesh);
+        isolateMaterial(mesh);
         mesh.userData.dimCastShadow = mesh.castShadow;
         mesh.castShadow = false;
         const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -493,18 +492,6 @@ export class PickHelper {
         delete mesh.userData.dimCastShadow;
     }
 
-    /**
-     * Placed copies of a model share its materials (Object3D.clone keeps them),
-     * so a mesh gets its own copy before any per-piece change (highlight, dim).
-     */
-    private isolateMaterial(mesh: THREE.Mesh): void {
-        if (mesh.userData.isolatedMaterial) return;
-        mesh.material = Array.isArray(mesh.material)
-            ? mesh.material.map((material) => material.clone())
-            : mesh.material.clone();
-        mesh.userData.isolatedMaterial = true;
-    }
-
     /** The registered model containing `object`, if any. */
     private rootOf(object: THREE.Object3D): THREE.Object3D | null {
         let current: THREE.Object3D | null = object;
@@ -516,10 +503,10 @@ export class PickHelper {
 
     /**
      * Visually highlights a mesh by setting its emissive color (bright orange
-     * by default, for the Inspect piece selection).
+     * by default, for the piece selection).
      */
     private highlightMesh(mesh: THREE.Mesh, colorHex = 0xff6600) {
-        this.isolateMaterial(mesh);
+        isolateMaterial(mesh);
 
         const material = mesh.material as THREE.MeshStandardMaterial;
         if (material && material.emissive) {

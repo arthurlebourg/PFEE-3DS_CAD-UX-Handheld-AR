@@ -1,4 +1,3 @@
-import type { ModeName } from '../modes/interactionMode.js';
 import type { UITarget } from '../ui/uiManager.js';
 import type { GlyphName } from './gestureGlyphs.js';
 import type { TutorialEvent } from './tutorialEvents.js';
@@ -13,6 +12,8 @@ import type { TutorialEvent } from './tutorialEvents.js';
 export interface StepProgress {
     /** Accumulated absolute yaw applied through the two-finger twist, in radians. */
     rotationRad: number;
+    /** Accumulated absolute tilt applied through the two-finger vertical drag, in radians. */
+    tiltRad: number;
     /** Widest perceived-scale ratio reached since the step started (>= 1). */
     scaleSpread: number;
     /** Largest explode-factor swing since the step started. */
@@ -21,18 +22,15 @@ export interface StepProgress {
 
 export interface TutorialStep {
     id: string;
-    /**
-     * Mode the gesture belongs to. The step is not blocking — if the user
-     * wanders into the other mode the card nudges them back instead of
-     * trapping them.
-     */
-    mode?: ModeName;
     title: string;
     body: string;
     glyph: GlyphName;
     /** UI element to ring. Only set it for elements that are actually visible. */
     spotlight?: UITarget;
-    /** Dim the scene around the spotlight. UI steps only — see the note below. */
+    /**
+     * Dim the scene around the spotlight. UI steps only: dimming passthrough
+     * while asking someone to aim at a real table is actively hostile.
+     */
     scrim?: boolean;
     /** Shown after a while without progress, or immediately in dev mode. */
     hint: string;
@@ -45,6 +43,8 @@ export interface TutorialStep {
 const MIN_SCALE_SPREAD = 1.25;
 /** A rotation counts at 20°: past any accidental drift, short of a chore. */
 const MIN_ROTATION_RAD = (20 * Math.PI) / 180;
+/** A tilt counts at 15°: the gesture has a 20 px dead zone already. */
+const MIN_TILT_RAD = (15 * Math.PI) / 180;
 /** An explosion counts at a fifth of the maximum factor. */
 const MIN_EXPLODE_DELTA = 0.3;
 
@@ -58,16 +58,17 @@ const isRelease = (event: TutorialEvent): boolean =>
 
 /**
  * The nine gestures, in the only order the app allows: nothing can be scaled,
- * rotated or inspected before a model exists in the scene, and the granularity
- * rail only exists once a piece is picked.
+ * rotated or moved before a model exists in the scene, and the granularity
+ * rail and the exploded view only exist once a piece is picked.
  *
- * Only step 5 dims the scene. Dimming passthrough while asking someone to aim
- * at a real table is actively hostile, so gesture steps get a ring and no scrim.
+ * There are no modes to switch between: picking a piece is what brings the
+ * selection gestures, so the tour simply walks from the scene to the pieces.
+ * Deleting (dropping a model on the trash) stays out of it, as it would take
+ * away the model the next steps need; the cheat sheet covers it.
  */
 export const TUTORIAL_STEPS: TutorialStep[] = [
     {
         id: 'place',
-        mode: 'edit',
         title: 'Poser le modèle',
         body: "Visez une surface plane : un aperçu translucide apparaît. Touchez l'écran pour poser le modèle.",
         glyph: 'tap',
@@ -77,7 +78,6 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     },
     {
         id: 'scale',
-        mode: 'edit',
         title: "Ajuster l'échelle",
         body: 'Pincez à deux doigts pour agrandir ou réduire la scène entière.',
         glyph: 'pinch',
@@ -86,7 +86,6 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     },
     {
         id: 'rotate',
-        mode: 'edit',
         title: 'Faire tourner la scène',
         body: "Posez deux doigts sur l'écran et faites-les pivoter, comme pour tourner une carte.",
         glyph: 'twist',
@@ -94,36 +93,32 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         isComplete: (event, progress) => isRelease(event) && progress.rotationRad >= MIN_ROTATION_RAD,
     },
     {
-        id: 'select',
-        mode: 'edit',
-        title: 'Sélectionner un modèle',
-        body: 'Touchez le modèle posé. Les boutons Supprimer et Réinitialiser apparaissent alors à gauche.',
-        glyph: 'tap',
-        hint: 'Visez bien le modèle : toucher le vide annule la sélection.',
-        isComplete: (event) => event.kind === 'model-selected' && event.selected,
+        id: 'tilt',
+        title: 'Incliner la scène',
+        body: 'Glissez deux doigts ensemble vers le haut ou vers le bas pour incliner la scène.',
+        glyph: 'tilt',
+        hint: 'Gardez les deux doigts côte à côte et déplacez-les dans le même sens.',
+        isComplete: (event, progress) => isRelease(event) && progress.tiltRad >= MIN_TILT_RAD,
     },
     {
-        id: 'switch-mode',
-        title: 'Passer en Inspection',
-        body: "Le mode Inspection sert à analyser un modèle : sélectionner ses pièces, les masquer, éclater la vue.",
-        glyph: 'ui-tap',
-        spotlight: 'mode',
-        scrim: true,
-        hint: "Le bouton de mode se trouve en bas à droite de l'écran.",
-        isComplete: (event) => event.kind === 'mode-changed' && event.mode === 'inspect',
+        id: 'move',
+        title: 'Déplacer le modèle',
+        body: 'Posez un doigt sur le modèle et faites-le glisser : il suit la surface.',
+        glyph: 'drag',
+        hint: 'Commencez à glisser tout de suite, sans marquer de pause sur le modèle.',
+        needsAR: true,
+        isComplete: (event) => event.kind === 'model-moved',
     },
     {
         id: 'pick-part',
-        mode: 'inspect',
         title: 'Sélectionner une pièce',
-        body: 'Touchez une pièce du modèle pour la mettre en évidence. Touchez le vide pour tout désélectionner.',
+        body: 'Touchez une pièce du modèle pour la sélectionner. Touchez le vide pour tout désélectionner.',
         glyph: 'tap',
         hint: 'Approchez-vous du modèle pour viser une pièce précise.',
         isComplete: (event) => event.kind === 'part-picked',
     },
     {
         id: 'granularity',
-        mode: 'inspect',
         title: 'Élargir la sélection',
         body: "Une pièce sélectionnée fait apparaître un rail au bord gauche. Glissez le curseur vers le haut : la sélection s'étend à l'ensemble qui contient la pièce.",
         glyph: 'slide-y',
@@ -131,21 +126,19 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
         isComplete: (event) => event.kind === 'granularity-changed' && event.level > 0,
     },
     {
+        id: 'explode',
+        title: 'Éclater le modèle',
+        body: "Avec une pièce sélectionnée, maintenez un doigt une demi-seconde, puis glissez vers le haut : les pièces s'écartent. Vers le bas, elles se rassemblent.",
+        glyph: 'hold-up',
+        hint: "Attendez que l'anneau se remplisse sous le doigt avant de glisser.",
+        isComplete: (event, progress) => isRelease(event) && progress.explodeDelta >= MIN_EXPLODE_DELTA,
+    },
+    {
         id: 'hide-part',
-        mode: 'inspect',
         title: 'Masquer une pièce',
-        body: 'Double-touchez une pièce pour la masquer et découvrir ce qu\'elle recouvre.',
+        body: 'Double-touchez une pièce pour la masquer et découvrir ce qu\'elle recouvre. « Tout afficher », en bas, la fait revenir.',
         glyph: 'double-tap',
         hint: 'Enchaînez les deux touchers rapidement, au même endroit.',
         isComplete: (event) => event.kind === 'part-hidden',
-    },
-    {
-        id: 'explode',
-        mode: 'inspect',
-        title: 'Éclater la vue',
-        body: "Pincez à deux doigts : le même geste qu'en Édition, mais ici il écarte les pièces les unes des autres.",
-        glyph: 'pinch',
-        hint: 'Écartez les deux doigts progressivement pour doser l\'éclatement.',
-        isComplete: (event, progress) => isRelease(event) && progress.explodeDelta >= MIN_EXPLODE_DELTA,
     },
 ];

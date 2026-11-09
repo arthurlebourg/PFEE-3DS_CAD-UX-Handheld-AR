@@ -1,8 +1,10 @@
 import type { ModeManager } from '../modes/modeManager.js';
 import type { PinchState } from '../modes/interactionMode.js';
 
-/** Delay before a still finger becomes a hold. */
-const HOLD_DELAY_MS = 1000;
+/** Delay before a still finger becomes a hold (drives the exploded view). */
+export const HOLD_DELAY_MS = 500;
+/** A finger travelling this far before the hold delay is a drag, not a hold. */
+const DRAG_THRESHOLD_PX = 10;
 /** Two taps closer than this in time form a double tap. */
 const DOUBLE_TAP_WINDOW_MS = 300;
 /** A pinch reaches full scale once fingers spread across ~60% of the short screen edge. */
@@ -15,27 +17,29 @@ const TWIST_ENGAGE_RAD = (12 * Math.PI) / 180;
 const TILT_ENGAGE_PX = 20;
 /** Touches starting on interactive UI never become scene gestures. */
 const UI_SELECTOR =
-    '.ar-menu-container, .ar-model-panel, .ar-quick-container, .ar-delete-btn, .ar-reset-btn, ' +
-    '.ar-scan-overlay, .ar-scan-toast, .ar-scan-card, .ar-invert-btn, .ar-history-container, .ar-history-btn, ' +
+    '.ar-menu-container, .ar-model-panel, .ar-quick-container, .ar-toolbar, .ar-exit-btn, ' +
+    '.ar-scan-overlay, .ar-scan-toast, .ar-scan-card, .ar-history-container, .ar-history-btn, ' +
     '.ar-help-btn, .ar-tutorial-card, .ar-tutorial-modal, .ar-cheatsheet, .ar-hierarchy-slider';
 
 /**
  * Gesture vocabulary, as classified here. Observers get the raw gesture — what
  * the fingers did — not what it achieved in the scene.
  */
-export type GestureKind = 'tap' | 'doubleTap' | 'holdStart' | 'pinchStart' | 'release';
+export type GestureKind = 'tap' | 'doubleTap' | 'holdStart' | 'dragStart' | 'pinchStart' | 'release';
 
 /**
  * GestureRecognizer: sole owner of raw touch input over the AR view.
  *
- * Classifies touches into tap / double tap / hold+drag / two-finger pinch and
- * forwards them to the active {@link ModeManager} mode. Screen taps still
- * arrive as XR `select` events (GPU picking needs the XRInputSource), so main
- * routes them here via {@link handleXRSelect}; the recognizer swallows the
- * stray selects that holds and pinches would otherwise emit.
+ * Classifies touches into tap / double tap / one-finger drag / hold+slide /
+ * two-finger pinch and forwards them to the active {@link ModeManager} state.
+ * A finger that moves before the hold delay is a drag; one that stays still
+ * through it is a hold. Screen taps still arrive as XR `select` events (GPU
+ * picking needs the XRInputSource), so main routes them here via
+ * {@link handleXRSelect}; the recognizer swallows the stray selects that
+ * drags, holds and pinches would otherwise emit.
  *
  * Centralizing classification here replaces the previous per-controller
- * listeners (VirtualJoycon, ExplodeController) and their consumeTap /
+ * listeners (the joystick, the pinch-driven explode) and their consumeTap /
  * stopPropagation cross-suppression.
  */
 export class GestureRecognizer {
@@ -45,8 +49,11 @@ export class GestureRecognizer {
 
     private holdTimer: number | null = null;
     private holdActive = false;
+    private dragActive = false;
+    /** The state turned this touch's drag down (nothing under the finger). */
+    private dragRefused = false;
     private pinchActive = false;
-    /** True from a hold or pinch starting until every finger has lifted. */
+    /** True from a drag, hold or pinch starting until every finger has lifted. */
     private continuousGesture = false;
     /** True while a finished hold/pinch must swallow its trailing XR select. */
     private suppressNextSelect = false;
@@ -94,7 +101,7 @@ export class GestureRecognizer {
         }, { capture: true });
 
         parent.addEventListener('beforexrselect', (event) => {
-            if (this.holdActive || this.pinchActive || this.suppressNextSelect) {
+            if (this.holdActive || this.dragActive || this.pinchActive || this.suppressNextSelect) {
                 event.preventDefault();
             }
         });
@@ -162,20 +169,29 @@ export class GestureRecognizer {
             this.startY = touch.clientY;
             this.currentX = touch.clientX;
             this.currentY = touch.clientY;
+            this.dragRefused = false;
 
-            this.holdTimer = window.setTimeout(() => {
-                this.holdActive = true;
-                this.continuousGesture = true;
-                this.suppressNextSelect = true;
-                this.onGesture?.('holdStart');
-                this.modeManager.current.onHoldStart?.(this.startX, this.startY);
-            }, HOLD_DELAY_MS);
+            // Only states that give the hold a meaning get the countdown, and
+            // its feedback under the finger.
+            const mode = this.modeManager.current;
+            if (mode.onHoldStart) {
+                mode.onHoldPending?.(this.startX, this.startY);
+                this.holdTimer = window.setTimeout(() => {
+                    this.holdTimer = null;
+                    this.holdActive = true;
+                    this.continuousGesture = true;
+                    this.suppressNextSelect = true;
+                    this.onGesture?.('holdStart');
+                    this.modeManager.current.onHoldStart?.(this.startX, this.startY);
+                }, HOLD_DELAY_MS);
+            }
             return;
         }
 
         if (event.touches.length === 2) {
-            // A second finger turns the gesture into a pinch; the hold (pending
-            // or active) is cancelled so both never fight over the touch.
+            // A second finger turns the gesture into a pinch; the drag or hold
+            // (pending or active) ends so they never fight over the touch.
+            this.endDrag();
             this.cancelHold();
             if (this.touchIgnored) return;
 
@@ -240,7 +256,7 @@ export class GestureRecognizer {
             return;
         }
 
-        if (event.touches.length === 1 && !this.touchIgnored) {
+        if (event.touches.length === 1 && !this.touchIgnored && !this.pinchActive) {
             const touch = event.touches[0];
             this.currentX = touch.clientX;
             this.currentY = touch.clientY;
@@ -250,6 +266,29 @@ export class GestureRecognizer {
                     this.currentX - this.startX,
                     this.currentY - this.startY,
                 );
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+
+            if (!this.dragActive && !this.dragRefused && !this.continuousGesture) {
+                const travel = Math.hypot(this.currentX - this.startX, this.currentY - this.startY);
+                if (travel < DRAG_THRESHOLD_PX) return;
+
+                // Moving before the delay: not a hold, maybe a drag.
+                this.cancelHold();
+                if (this.modeManager.current.onDragStart?.(this.startX, this.startY)) {
+                    this.dragActive = true;
+                    this.continuousGesture = true;
+                    this.suppressNextSelect = true;
+                    this.onGesture?.('dragStart');
+                } else {
+                    this.dragRefused = true;
+                }
+            }
+
+            if (this.dragActive) {
+                this.modeManager.current.onDragMove?.(this.currentX, this.currentY);
                 event.preventDefault();
                 event.stopPropagation();
             }
@@ -265,11 +304,14 @@ export class GestureRecognizer {
             this.modeManager.current.onPinchEnd?.();
         }
 
-        if (this.holdActive || this.suppressNextSelect) {
+        if (this.holdActive || this.dragActive || this.suppressNextSelect) {
             event.preventDefault();
             event.stopPropagation();
         }
 
+        if (event.touches.length === 0) {
+            this.endDrag();
+        }
         this.cancelHold();
 
         if (event.touches.length === 0) {
@@ -285,11 +327,18 @@ export class GestureRecognizer {
         if (this.holdTimer !== null) {
             clearTimeout(this.holdTimer);
             this.holdTimer = null;
+            this.modeManager.current.onHoldCancel?.();
         }
         if (this.holdActive) {
             this.holdActive = false;
             this.modeManager.current.onHoldEnd?.();
         }
+    }
+
+    private endDrag(): void {
+        if (!this.dragActive) return;
+        this.dragActive = false;
+        this.modeManager.current.onDragEnd?.(this.currentX, this.currentY);
     }
 
     /**

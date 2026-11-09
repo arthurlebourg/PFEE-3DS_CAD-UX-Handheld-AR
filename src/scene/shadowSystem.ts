@@ -9,7 +9,7 @@ export interface ShadowSurfacePose {
 /**
  * Handles directional shadows for CAD models.
  *
- * The system is deliberately independent from Inspect/Edit features:
+ * The system is deliberately independent from the selection features:
  * - exploded view works because it moves the actual meshes;
  * - hidden pieces stop casting automatically because mesh.visible becomes false;
  * - any registered mesh can cast and receive shadows normally.

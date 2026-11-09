@@ -115,7 +115,6 @@ export function injectTutorialStyles(): void {
 
             .ar-tut-note.visible { display: block; }
             .ar-tut-note.hint { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.8); }
-            .ar-tut-note.blocked { background: rgba(255, 179, 0, 0.16); color: #ffcf5c; }
 
             .ar-tut-foot {
                 display: flex;
@@ -273,8 +272,9 @@ export function injectTutorialStyles(): void {
             }
 
             .ar-cs-section { margin-top: 18px; }
-            .ar-cs-section[data-mode="edit"] { --ar-tut-accent: #007bff; }
-            .ar-cs-section[data-mode="inspect"] { --ar-tut-accent: #28a745; }
+            .ar-cs-section[data-section="view"] { --ar-tut-accent: #007bff; }
+            .ar-cs-section[data-section="scene"] { --ar-tut-accent: #28a745; }
+            .ar-cs-section[data-section="selection"] { --ar-tut-accent: #ff8c00; }
 
             .ar-cs-section-title {
                 font-size: 10px;

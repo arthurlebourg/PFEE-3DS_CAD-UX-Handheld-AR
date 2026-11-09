@@ -10,10 +10,16 @@ import { TUTORIAL_STEPS } from './tutorialSteps.js';
 const STORAGE_KEY = 'ar-tutorial-v1-completed';
 /** How long a user may flounder before the hint and the step escape appear. */
 const HINT_DELAY_MS = 15000;
+/**
+ * Pause between the last gesture succeeding and the finish card, so the user
+ * sees its effect (e.g. the piece fading out) instead of the card cutting in.
+ */
+const FINISH_DELAY_MS = 1200;
 
 export interface TutorialManagerDeps {
     events: TutorialEventBus;
     spotlightRect: (target: UITarget) => DOMRect | null;
+    /** The interaction state, so the cheat sheet lists its gestures first. */
     currentMode: () => ModeName;
     /** Undoes what the tour did to the scene (explode, hidden parts, scale). */
     resetScene: () => void;
@@ -22,18 +28,18 @@ export interface TutorialManagerDeps {
 }
 
 /** Steps are matched against a blank progress to test them out of order. */
-const NO_PROGRESS: StepProgress = { rotationRad: 0, scaleSpread: 1, explodeDelta: 0 };
+const NO_PROGRESS: StepProgress = { rotationRad: 0, tiltRad: 0, scaleSpread: 1, explodeDelta: 0 };
 
 /**
  * TutorialManager: the guided tour's state machine.
  *
- * It observes; it never intercepts. The real modes keep handling every gesture,
+ * It observes; it never intercepts. The real states keep handling every gesture,
  * so each step is validated by the effect the user just watched happen in the
  * scene — which is also why the tour is impossible to fake your way through.
  *
  * It is deliberately forgiving: a step whose event arrives early is remembered
- * and skipped when reached, wandering into the wrong mode nudges instead of
- * trapping, and every step can be skipped once the user is visibly stuck.
+ * and skipped when reached, and every step can be skipped once the user is
+ * visibly stuck.
  */
 export class TutorialManager {
     private readonly deps: TutorialManagerDeps;
@@ -52,7 +58,7 @@ export class TutorialManager {
     private lastExplode = 0;
 
     private hintTimer: number | null = null;
-    private hintShown = false;
+    private finishTimer: number | null = null;
     /** Steps the user performed before being asked to. */
     private readonly satisfied = new Set<string>();
 
@@ -67,7 +73,10 @@ export class TutorialManager {
                 onStart: () => this.begin(),
                 onQuit: () => this.dismiss(),
                 onSkipStep: () => this.goto(this.index + 1),
-                onResetScene: () => this.deps.resetScene(),
+                onResetScene: () => {
+                    this.deps.resetScene();
+                    this.overlay.hideAll();
+                },
                 onClose: () => this.overlay.hideAll(),
             },
             deps.spotlightRect,
@@ -118,14 +127,15 @@ export class TutorialManager {
         this.goto(0);
     }
 
-    private goto(target: number): void {
+    /** `finishDelayMs` defers the finish card when the tour ends on a gesture. */
+    private goto(target: number, finishDelayMs = 0): void {
         let index = target;
         while (index < this.steps.length && this.satisfied.has(this.steps[index].id)) {
             index++;
         }
 
         if (index >= this.steps.length) {
-            this.complete();
+            this.complete(finishDelayMs);
             return;
         }
 
@@ -134,20 +144,23 @@ export class TutorialManager {
         this.baselineScale = this.lastScale;
         this.baselineExplode = this.lastExplode;
 
-        this.overlay.showStep(
-            this.steps[index],
-            index,
-            this.steps.length,
-            this.steps[index].mode ?? this.deps.currentMode(),
-        );
-        this.updateBlocked();
+        this.overlay.showStep(this.steps[index], index, this.steps.length);
         this.startHintTimer();
     }
 
-    private complete(): void {
+    private complete(delayMs = 0): void {
         this.teardown();
         this.rememberTutorialSeen();
-        this.overlay.showFinish();
+        if (delayMs <= 0) {
+            this.overlay.showFinish();
+            return;
+        }
+        // Clear the step card at once: the scene is what to look at now.
+        this.overlay.hideAll();
+        this.finishTimer = window.setTimeout(() => {
+            this.finishTimer = null;
+            this.overlay.showFinish();
+        }, delayMs);
     }
 
     /** "Plus tard" / "Quitter": the ? button remains, so this must not nag. */
@@ -162,6 +175,10 @@ export class TutorialManager {
         this.unsubscribe?.();
         this.unsubscribe = null;
         this.clearHintTimer();
+        if (this.finishTimer !== null) {
+            clearTimeout(this.finishTimer);
+            this.finishTimer = null;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -174,17 +191,8 @@ export class TutorialManager {
         this.track(event);
         this.markSatisfiedAhead(event);
 
-        if (event.kind === 'mode-changed') {
-            this.updateBlocked();
-        }
-
-        const step = this.steps[this.index];
-        // A gesture performed in the wrong mode does something else entirely,
-        // so it cannot count for this step.
-        if (step.mode && step.mode !== this.deps.currentMode()) return;
-
-        if (step.isComplete(event, this.progress)) {
-            this.goto(this.index + 1);
+        if (this.steps[this.index].isComplete(event, this.progress)) {
+            this.goto(this.index + 1, FINISH_DELAY_MS);
         }
     }
 
@@ -202,6 +210,9 @@ export class TutorialManager {
             }
             case 'scene-rotated':
                 this.progress.rotationRad += Math.abs(event.deltaRad);
+                break;
+            case 'scene-tilted':
+                this.progress.tiltRad += Math.abs(event.deltaRad);
                 break;
             case 'explode-changed':
                 this.lastExplode = event.factor;
@@ -223,26 +234,9 @@ export class TutorialManager {
     private markSatisfiedAhead(event: TutorialEvent): void {
         for (let i = this.index + 1; i < this.steps.length; i++) {
             const step = this.steps[i];
-            if (step.mode && step.mode !== this.deps.currentMode()) continue;
             if (step.isComplete(event, NO_PROGRESS)) {
                 this.satisfied.add(step.id);
             }
-        }
-    }
-
-    private updateBlocked(): void {
-        const step = this.steps[this.index];
-        const blocked = step.mode && step.mode !== this.deps.currentMode();
-
-        if (blocked) {
-            this.overlay.setBlocked(step.mode ?? null);
-            return;
-        }
-
-        this.overlay.setBlocked(null);
-        // Un-blocking wipes the note, so put the hint back if it had appeared.
-        if (this.hintShown) {
-            this.overlay.showHint(step.hint);
         }
     }
 
@@ -252,13 +246,11 @@ export class TutorialManager {
 
     private startHintTimer(): void {
         this.clearHintTimer();
-        this.hintShown = false;
 
         // In dev mode the XR select events that drive taps never fire, so the
         // escape has to be there from the start to iterate on the copy.
         const delay = this.deps.isDevMode ? 0 : HINT_DELAY_MS;
         this.hintTimer = window.setTimeout(() => {
-            this.hintShown = true;
             this.overlay.showHint(this.steps[this.index].hint);
         }, delay);
     }

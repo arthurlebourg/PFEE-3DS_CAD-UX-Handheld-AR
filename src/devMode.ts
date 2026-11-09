@@ -32,8 +32,8 @@ export function setupDevMode(
   controls.update();
 
   // No XR session fires 'sessionstart' in dev mode, so surface the in-app UI
-  // (model picker, debug/perf toggles) directly. main.ts switches to Inspect
-  // mode since placement relies on AR hit-testing.
+  // (model picker, debug/perf toggles) directly. Placement relies on AR
+  // hit-testing, so main drops the dev model in place instead.
   uiManager.toggleVisibility(true);
   spatialMappingOverlay?.start();
 

@@ -1,10 +1,12 @@
 import type { InteractionMode, ModeName } from './interactionMode.js';
 
 /**
- * ModeManager: single source of truth for the active interaction mode.
+ * ModeManager: single source of truth for the active interaction state.
  *
- * Switching modes runs the exit/enter hooks and notifies the UI through
- * onChange, so the mode indicator can never drift from the actual state.
+ * The state is never chosen by the user: main switches it whenever the
+ * selection becomes empty or not. Switching runs the exit/enter hooks and
+ * notifies the UI through onChange, so the toolbar can never drift from the
+ * actual state.
  */
 export class ModeManager {
     private readonly modes: Record<ModeName, InteractionMode>;
@@ -12,13 +14,13 @@ export class ModeManager {
     private readonly onChange: (mode: ModeName) => void;
 
     constructor(
-        edit: InteractionMode,
-        inspect: InteractionMode,
+        sceneMode: InteractionMode,
+        selectionMode: InteractionMode,
         onChange: (mode: ModeName) => void,
     ) {
-        this.modes = { edit, inspect };
+        this.modes = { scene: sceneMode, selection: selectionMode };
         this.onChange = onChange;
-        this.active = edit;
+        this.active = sceneMode;
         this.active.enter();
         this.onChange(this.active.name);
     }
@@ -38,9 +40,5 @@ export class ModeManager {
         this.active = this.modes[name];
         this.active.enter();
         this.onChange(name);
-    }
-
-    public toggle(): void {
-        this.setMode(this.active.name === 'edit' ? 'inspect' : 'edit');
     }
 }

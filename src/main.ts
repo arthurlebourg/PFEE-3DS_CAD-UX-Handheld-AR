@@ -10,17 +10,22 @@ import { PickHelper } from './scene/picking.js';
 import { SceneRotator, realToScene } from './scene/sceneRotator.js';
 import { ShadowSystem } from './scene/shadowSystem.js';
 import type { ShadowSurfacePose } from './scene/shadowSystem.js';
-import { GestureRecognizer } from './input/gestureRecognizer.js';
+import { GestureRecognizer, HOLD_DELAY_MS } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
-import { EditMode } from './modes/editMode.js';
-import { InspectMode } from './modes/inspectMode.js';
+import { SceneMode } from './modes/sceneMode.js';
+import { SelectionMode } from './modes/selectionMode.js';
+import { ViewController } from './scene/viewController.js';
+import { ExplodeController, MAX_EXPLODE_FACTOR } from './scene/explodeController.js';
+import { HiddenParts } from './scene/hiddenParts.js';
 import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
-import { ModeHistoryManager } from './history/historyManager.js';
+import { HistoryStack } from './history/historyManager.js';
 import { TutorialEventBus } from './tutorial/tutorialEvents.js';
 import { TutorialManager } from './tutorial/tutorialManager.js';
 import { PlacementOverlay } from './ui/placementOverlay.js';
 import { HierarchySlider } from './ui/hierarchySlider.js';
-import { buildAssemblyTree } from './scene/assemblyTree.js';
+import { ExplodeGauge } from './ui/explodeGauge.js';
+import { TrashZone } from './ui/trashZone.js';
+import { buildAssemblyTree, pieceMeshes, pieceOf } from './scene/assemblyTree.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const modelUrls: Record<string, string> = {};
@@ -30,7 +35,6 @@ for (const path in modules) {
 }
 const availableModels = Object.keys(modelUrls);
 
-/** Physical (rig-independent) pose stored on a model's userData. */
 /**
  * On the preview, `physical*` is the real-world hit-test pose. On a placed
  * model it is the model's scene pose at unit rig scale (equal to the real
@@ -76,6 +80,10 @@ let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let tutorial: TutorialManager;
 let placementOverlay: PlacementOverlay;
+let explodeGauge: ExplodeGauge;
+let trashZone: TrashZone;
+/** Previous animation-loop timestamp, to advance the fades. */
+let lastFrameTime: number | null = null;
 
 /**
  * The tutorial observes the app through this bus. Emitting is the app's only
@@ -83,10 +91,23 @@ let placementOverlay: PlacementOverlay;
  * validated by the effect the user actually saw in the scene.
  */
 const tutorialEvents = new TutorialEventBus();
-let editMode: EditMode;
-let inspectMode: InspectMode;
+let sceneMode: SceneMode;
+let selectionMode: SelectionMode;
+let view: ViewController;
+let explodeController: ExplodeController;
+let hiddenParts: HiddenParts;
 let spatialMappingOverlay: SpatialMappingOverlay;
-let historyManager: ModeHistoryManager;
+let historyManager: HistoryStack;
+
+/** The model being dragged, and where the drag started (see beginMove). */
+interface MoveState {
+    model: THREE.Object3D;
+    /** Scene-space point of the support plane under the finger at the start. */
+    startPoint: THREE.Vector3 | null;
+    startPhysical: THREE.Vector3;
+    startSurface: THREE.Vector3;
+}
+let move: MoveState | null = null;
 
 /**
  * ?placementDebug=1 shows the hit-test pose and each placed model's bounding
@@ -157,17 +178,18 @@ function init(): void {
     perf = new PerfProbe({ visible: false });
     perf.mount(document.body);
 
-    historyManager = new ModeHistoryManager('edit', (canUndo, canRedo) => {
-        uiManager?.updateHistoryState(canUndo, canRedo);
+    historyManager = new HistoryStack(50, () => {
+        uiManager?.updateHistoryState(historyManager.canUndo, historyManager.canRedo);
     });
 
     uiManager = new UIManager(
         {
-            onModeToggle: () => modeManager.toggle(),
             onModelSelect: (modelName) => loadModel(modelName),
-            onDelete: () => deleteSelectedModel(),
-            onReset: () => resetSelectedModel(),
+            onReset: () => resetScene(),
             onInvertSelection: () => invertSelection(),
+            onShowAll: () => hiddenParts.showAll(true),
+            onCloseSelection: () => clearSelection(),
+            onExit: () => void renderer.xr.getSession()?.end(),
             onUndo: () => historyManager.undo(),
             onRedo: () => historyManager.redo(),
             onPerfToggle: (showPerf) => perf.setVisible(showPerf),
@@ -179,15 +201,19 @@ function init(): void {
 
     uiManager.attach(document.body);
     placementOverlay.attach(document.body);
-    historyManager.notifyActiveState();
+    uiManager.updateHistoryState(false, false);
     sceneRotator = new SceneRotator();
+
+    explodeGauge = new ExplodeGauge(HOLD_DELAY_MS);
+    explodeGauge.attach(document.body);
+    trashZone = new TrashZone();
+    trashZone.attach(document.body);
 
     // The tour waits for mapping: its first step places a model, which needs a
     // surface, and its cards would otherwise stack under the scan overlay.
     spatialMappingOverlay = new SpatialMappingOverlay(() => {
         if (!isDevMode) {
-            modeManager.setMode('edit');
-            editMode.arm();
+            sceneMode.arm();
             tutorial.offerOnFirstRun();
         } else {
             if (devModel) {
@@ -204,95 +230,134 @@ function init(): void {
 
     // Yaw of the current two-finger gesture, so the tutorial gets deltas.
     let gestureYaw = 0;
+    let gestureTilt = 0;
 
-    editMode = new EditMode({
-        placeModel: () => {
-            if (!spatialMappingOverlay.isComplete) {
-                return false;
-            }
-            if (previewModel?.visible && loadedModel && previewModel.userData.placementAllowed !== false) {                
-                placeModel();
-                tutorialEvents.emit({ kind: 'model-placed' });
-                return true;
-            }
-            return false;
-        },
+    view = new ViewController({
         onRigScale: (scale) => {
             updateRigScale(scale);
             tutorialEvents.emit({ kind: 'scale-changed', perceived: 1 / scale });
         },
-        pickModel: (inputSource) => {
-            const mesh = pickHelper.pickXR(inputSource, renderer, scene, perf);
-            return mesh ? findRootPlacedModel(mesh) : null;
-        },
-        highlightModel: (model) => {
-            pickHelper.highlightModel(model);
-        },
-        unhighlightModel: (model) => {
-            pickHelper.unhighlightModel(model);
-        },
-        onSelectionChange: (model) => {
-            uiManager.setModelActionsVisible(model !== null);
-            tutorialEvents.emit({ kind: 'model-selected', selected: model !== null });
-        },
-        onAction: (action) => {
-            historyManager.push('edit', action);
-        },
         beginSceneRotation: () => {
             gestureYaw = 0;
+            gestureTilt = 0;
             sceneRotator.beginGesture(xrRig, placedModels, camera);
         },
         rotateScene: (yaw, tilt) => {
             sceneRotator.applyGesture(xrRig, placedModels, yaw, tilt);
 
             // With nothing placed the rotation is a no-op, so it must not count
-            // towards the tutorial's rotation step either.
-            const deltaRad = yaw - gestureYaw;
+            // towards the tutorial's rotation steps either.
+            const yawDelta = yaw - gestureYaw;
+            const tiltDelta = tilt - gestureTilt;
             gestureYaw = yaw;
-            if (placedModels.length > 0 && deltaRad !== 0) {
-                tutorialEvents.emit({ kind: 'scene-rotated', deltaRad });
+            gestureTilt = tilt;
+            if (placedModels.length === 0) return;
+            if (yawDelta !== 0) {
+                tutorialEvents.emit({ kind: 'scene-rotated', deltaRad: yawDelta });
+            }
+            if (tiltDelta !== 0) {
+                tutorialEvents.emit({ kind: 'scene-tilted', deltaRad: tiltDelta });
             }
         },
         getSceneTransform: () => sceneRotator.getTransform(),
         setSceneTransform: (transform) => {
             sceneRotator.setTransform(transform, xrRig);
         },
+        onAction: (action) => {
+            historyManager.push(action);
+        },
     });
 
-    inspectMode = new InspectMode({
-        pickHelper,
-        pickMesh: (inputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf),
-        onExplode: (factor) => {
-            explode(factor);
+    explodeController = new ExplodeController({
+        onLiftChange: (model) => {
+            syncModelPosition(model);
+        },
+        onFactorChange: (_model, factor) => {
             tutorialEvents.emit({ kind: 'explode-changed', factor });
         },
-        showGranularity: (chain) => {
-            hierarchySlider.setHierarchy(chain);
-        },
-        hideGranularity: () => {
-            hierarchySlider.hide();
-            pickHelper.clearContextDimming();
-        },
-        onPartPicked: () => {
-            tutorialEvents.emit({ kind: 'part-picked' });
-        },
-        onPartHidden: () => {
-            tutorialEvents.emit({ kind: 'part-hidden' });
-        },
         onAction: (action) => {
-            historyManager.push('inspect', action);
+            historyManager.push(action);
         },
     });
 
-    modeManager = new ModeManager(editMode, inspectMode, (mode) => {
+    hiddenParts = new HiddenParts({
+        onChange: (count) => {
+            uiManager.setHiddenCount(count);
+        },
+        onAction: (action) => {
+            historyManager.push(action);
+        },
+    });
+
+    const pickMesh = (inputSource?: XRInputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf);
+
+    sceneMode = new SceneMode({
+        view,
+        placeModel: () => {
+            if (!spatialMappingOverlay.isComplete) {
+                return false;
+            }
+            if (previewModel?.visible && loadedModel && previewModel.userData.placementAllowed !== false) {
+                placeModel();
+                tutorialEvents.emit({ kind: 'model-placed' });
+                return true;
+            }
+            return false;
+        },
+        pickMesh,
+        selectPiece: (mesh) => {
+            togglePiece(mesh);
+        },
+        hideJustDeselected: (mesh) => {
+            if (!justDeselected.includes(mesh)) return false;
+            hidePiece(mesh);
+            return true;
+        },
+        modelAt: (x, y) => movableModelAt(x, y),
+        beginMove: (model, x, y) => {
+            beginMove(model, x, y);
+        },
+        updateMove: (x, y) => {
+            updateMove(x, y);
+        },
+        endMove: (x, y) => {
+            endMove(x, y);
+        },
+    });
+
+    selectionMode = new SelectionMode({
+        view,
+        pickMesh,
+        togglePiece: (mesh) => {
+            togglePiece(mesh);
+        },
+        hidePiece: (mesh) => {
+            hidePiece(mesh);
+        },
+        showHoldPending: (x, y) => {
+            explodeGauge.showPending(x, y);
+        },
+        hideHoldFeedback: () => {
+            explodeGauge.hide();
+        },
+        beginExplode: (x, y) => {
+            beginExplode(x, y);
+        },
+        updateExplode: (dy) => {
+            updateExplode(dy);
+        },
+        endExplode: () => {
+            explodeController.endGesture();
+            explodeGauge.hide();
+        },
+    });
+
+    modeManager = new ModeManager(sceneMode, selectionMode, (mode) => {
         uiManager.setMode(mode);
-        historyManager.setMode(mode);
-        placementOverlay.setMode(mode);
-        if (mode === 'inspect' && previewModel) {
+        if (mode === 'selection' && previewModel) {
             previewModel.visible = false;
             placementOverlay.hideReticle();
         }
-        tutorialEvents.emit({ kind: 'mode-changed', mode });
     });
 
     gestureRecognizer = new GestureRecognizer(modeManager, (gesture) => {
@@ -313,31 +378,32 @@ function init(): void {
 
     if (isDevMode) {
         devTick = setupDevMode(scene, camera, renderer, uiManager, spatialMappingOverlay);
-        // No AR hit-testing in dev mode, so placement is useless: inspecting
-        // (picking, explode) is the relevant default.
-        modeManager.setMode('inspect');
     } else {
         const arButtonOptions = {
             requiredFeatures: ['hit-test'],
             optionalFeatures: ['dom-overlay'],
             domOverlay: { root: document.body },
         };
-        document.body.appendChild(ARButton.createButton(renderer, arButtonOptions));
+        const button = ARButton.createButton(renderer, arButtonOptions);
+        document.body.appendChild(button);
 
         renderer.xr.addEventListener('sessionstart', () => {
+            // Its "STOP AR" sits bottom centre, where the toolbar goes; the
+            // Quitter icon in the top-left corner replaces it in session.
+            button.style.visibility = 'hidden';
             uiManager.toggleVisibility(true);
             spatialMappingOverlay.start();
             placementOverlay.setVisible(true);
-            placementOverlay.setMode(modeManager.currentName);
         });
         renderer.xr.addEventListener('sessionend', () => {
+            button.style.visibility = '';
             uiManager.toggleVisibility(false);
             perf.setVisible(false);
             tutorial.stop();
             spatialMappingOverlay.hide();
             placementOverlay.setVisible(false);
-            hierarchySlider.hide();
-            pickHelper.clearSelection();
+            explodeGauge.hide();
+            clearSelection();
         });
     }
 
@@ -420,11 +486,11 @@ function loadModel(modelName: string): void {
                 quaternion: new THREE.Quaternion(),
             });
         } else {
-            // Selecting a model in the carousel arms placement: the next tap
-            // in Edit mode will place it once mapping is complete.
+            // Choosing a model in the picker arms placement: the next tap
+            // places it once mapping is complete.
             if (spatialMappingOverlay.isComplete) {
-                modeManager.setMode('edit');
-                editMode.arm();
+                clearSelection();
+                sceneMode.arm();
             }
         }
     });
@@ -547,34 +613,39 @@ function onSelect(inputSource?: XRInputSource): void {
 /**
  * Updates the scale of the camera rig and adjusts placed models' positions
  * to keep them anchored to their physical positions. Real-world anchors
- * (reticle, preview, shadow receivers) follow on the next frame.
+ * (reticle, preview, shadow receivers) follow on the next frame. The
+ * selection survives: zooming is a view gesture, available in every state.
  */
 function updateRigScale(newScale: number): void {
     rigScale = newScale;
-    
+
     if (xrRig) {
         xrRig.scale.set(rigScale, rigScale, rigScale);
     }
-    
-    // Update all placed models' positions to remain anchored physically
+
     for (const model of placedModels) {
-        const { physicalPosition } = model.userData as PhysicalPose;
-        if (physicalPosition) {
-            model.position.copy(physicalPosition).multiplyScalar(rigScale);
-        }
+        syncModelPosition(model);
     }
 
     // The rig offset is in scaled units, so it follows the new scale.
     sceneRotator.refresh(xrRig);
+}
 
-    // Clear picking selection to prevent offset/scale mismatch while dragging
-    if (pickHelper) {
-        pickHelper.clearSelection();
-        if (pickHelper) {
-        pickHelper.clearSelection();
-        hierarchySlider.hide();
+/**
+ * Puts a model root where its pose says: its unit-scale placement pose
+ * (`physicalPosition`, or the dev model's original position) times the rig
+ * scale, plus the exploded view's lift.
+ */
+function syncModelPosition(model: THREE.Object3D): void {
+    const { physicalPosition } = model.userData as PhysicalPose;
+    if (physicalPosition) {
+        model.position.copy(physicalPosition).multiplyScalar(rigScale);
+    } else if (model.userData.originalPosition) {
+        model.position.copy(model.userData.originalPosition as THREE.Vector3);
+    } else {
+        return;
     }
-    }
+    model.position.add(explodeController.liftOffset(model, new THREE.Vector3()));
 }
 
 /**
@@ -585,7 +656,7 @@ function placeModel(): void {
 
     const model = loadedModel.clone();
     previewModel.matrix.decompose(model.position, model.quaternion, model.scale);
-    
+
     // The preview already sits at the hit-test pose mapped into the (possibly
     // rotated) scene: keep that scene pose, so the model lands under the
     // reticle and then turns with the rest of the scene.
@@ -597,9 +668,6 @@ function placeModel(): void {
         model.userData.surfaceRotation = previewPose.physicalRotation.clone();
     }
 
-    // Save original scale (including auto-fit scale) for the Reset action
-    model.userData.originalModelScale = model.scale.clone();
-
     scene.add(model);
     placedModels.push(model);
     pickHelper.registerModel(model);
@@ -608,24 +676,13 @@ function placeModel(): void {
     // The invisible receiver lies on the exact real surface used for placement.
     shadowSystem.registerModel(model, shadowSurfacePose(model));
 
-    historyManager.push('edit', {
+    historyManager.push({
         description: 'Placer modèle',
         undo: () => {
-            if (editMode.selectedModel === model) {
-                editMode.clearSelection();
-                pickHelper.clearSelection();
-            }
-            pickHelper.removeModel(model);
-            scene.remove(model);
-            const idx = placedModels.indexOf(model);
-            if (idx !== -1) {
-                placedModels.splice(idx, 1);
-            }
+            removeModel(model);
         },
         redo: () => {
-            scene.add(model);
-            placedModels.push(model);
-            pickHelper.registerModel(model);
+            restoreModel(model, placedModels.length);
         },
     });
 }
@@ -644,117 +701,281 @@ function findRootPlacedModel(object: THREE.Object3D): THREE.Object3D | null {
     return null;
 }
 
-/**
- * Deletes the model currently selected in Edit mode from the scene.
- */
-function deleteSelectedModel(): void {
-    const model = editMode.selectedModel;
-    if (!model) return;
-
-    const index = placedModels.indexOf(model);
-    const wasDevModel = (model === devModel);
-
-    // Unhighlights the model and hides the Delete/Reset buttons.
-    editMode.clearSelection();
-    pickHelper.clearSelection();
-
+/** Takes a model out of the scene (delete, or undoing its placement). */
+function removeModel(model: THREE.Object3D): void {
     pickHelper.removeModel(model);
     shadowSystem.unregisterModel(model);
     scene.remove(model);
 
+    const index = placedModels.indexOf(model);
     if (index !== -1) {
         placedModels.splice(index, 1);
     }
     if (model === devModel) {
         devModel = null;
     }
+    syncState();
+}
 
-    historyManager.push('edit', {
+/** Puts a removed model back, at its former place in the list. */
+function restoreModel(model: THREE.Object3D, index: number): void {
+    scene.add(model);
+    placedModels.splice(Math.min(index, placedModels.length), 0, model);
+    pickHelper.registerModel(model);
+    shadowSystem.registerModel(model, shadowSurfacePose(model));
+}
+
+/** Deletes a placed model (dropped on the trash), as one undoable step. */
+function deleteModel(model: THREE.Object3D): void {
+    const index = placedModels.indexOf(model);
+    if (index === -1) return;
+
+    removeModel(model);
+    tutorialEvents.emit({ kind: 'model-deleted' });
+
+    historyManager.push({
         description: 'Supprimer modèle',
         undo: () => {
-            scene.add(model);
-            if (index >= 0 && index <= placedModels.length) {
-                placedModels.splice(index, 0, model);
-            } else {
-                placedModels.push(model);
-            }
-            if (wasDevModel) {
-                devModel = model;
-            }
-            pickHelper.registerModel(model);
-            editMode.selectModel(model);
+            restoreModel(model, index);
         },
         redo: () => {
-            if (editMode.selectedModel === model) {
-                editMode.clearSelection();
-                pickHelper.clearSelection();
-            }
-            pickHelper.removeModel(model);
-            scene.remove(model);
-            const idx = placedModels.indexOf(model);
-            if (idx !== -1) {
-                placedModels.splice(idx, 1);
-            }
-            if (model === devModel) {
-                devModel = null;
-            }
+            removeModel(model);
         },
     });
+}
+
+// -----------------------------------------------------------------------------
+// Selection: the state follows it
+// -----------------------------------------------------------------------------
+
+/** Scene when nothing is selected, Selection otherwise. */
+function syncState(): void {
+    const selecting = pickHelper.selectedMeshes.length > 0;
+    if (!selecting) {
+        hierarchySlider.hide();
+        pickHelper.clearContextDimming();
+    }
+    modeManager.setMode(selecting ? 'selection' : 'scene');
+}
+
+/** The piece the last tap dropped from the selection, for a double tap on it. */
+let justDeselected: THREE.Mesh[] = [];
+
+/**
+ * Toggles the tapped piece in the selection (a new piece also opens the
+ * granularity slider on its ancestor chain); a tap on empty space (null)
+ * clears the selection.
+ */
+function togglePiece(mesh: THREE.Mesh | null): void {
+    justDeselected = [];
+    if (mesh) {
+        const isNewSelection = !pickHelper.selectedMeshes.includes(mesh);
+        if (!isNewSelection) {
+            const piece = pieceOf(mesh);
+            justDeselected = piece ? pieceMeshes(piece) : [mesh];
+        }
+        pickHelper.handleMeshSelection(mesh);
+        if (isNewSelection) {
+            hierarchySlider.setHierarchy(pickHelper.getSelectableAncestorChain(mesh));
+        }
+        tutorialEvents.emit({ kind: 'part-picked' });
+    } else {
+        pickHelper.clearSelection();
+    }
+    syncState();
+}
+
+function clearSelection(): void {
+    pickHelper.clearSelection();
+    syncState();
 }
 
 /**
- * Executes the actual reset of transforms and inspect state on a model.
+ * Inverts the piece selection: selects unselected visible meshes, deselects
+ * selected ones.
  */
-function doResetModel(model: THREE.Object3D): void {
-    // Drop Inspect-side state first: piece selection, hidden pieces, and the
-    // committed explode factor (positions are restored below).
-    pickHelper.clearSelection();
-    inspectMode.showAllHidden(false);
-    inspectMode.resetExplodeState();
-
-    // Reset camera rig rotation and perceived scale to their default values,
-    // and put every placed model back where it was placed on the real table.
-    sceneRotator.reset(xrRig);
-    updateRigScale(1.0);
-    editMode.resetScaleState();
-    reanchorModelsToSurface();
-
-    // Restore every part's original local transform (saved at registration).
-    model.traverse((child) => {
-        if (!(child instanceof THREE.Mesh)) return;
-        if (child.userData.originalPosition) {
-            child.position.copy(child.userData.originalPosition as THREE.Vector3);
-        }
-        if (child.userData.originalQuaternion) {
-            child.quaternion.copy(child.userData.originalQuaternion as THREE.Quaternion);
-        }
-        if (child.userData.originalScale) {
-            child.scale.copy(child.userData.originalScale as THREE.Vector3);
-        }
-    });
-
-    // Restore the model's own pose (placed models were re-anchored above).
-    if (model === devModel) {
-        if (model.userData.originalPosition) {
-            model.position.copy(model.userData.originalPosition as THREE.Vector3);
-        }
-        if (model.userData.originalQuaternion) {
-            model.quaternion.copy(model.userData.originalQuaternion as THREE.Quaternion);
-        }
-    }
-    if (model.userData.originalModelScale) {
-        model.scale.copy(model.userData.originalModelScale as THREE.Vector3);
-    }
-
-    if (model === devModel) {
-        shadowSystem.updateSurface(model, {
-            position: new THREE.Vector3(model.position.x, 0, model.position.z),
-            quaternion: new THREE.Quaternion(),
-        });
-    } else {
-        shadowSystem.updateSurface(model, shadowSurfacePose(model));
-    }
+function invertSelection(): void {
+    pickHelper.invertSelection();
+    syncState();
 }
+
+/** Hides the double-tapped piece (all its primitives), with a fade. */
+function hidePiece(mesh: THREE.Mesh): void {
+    const piece = pieceOf(mesh);
+    const meshes = piece ? pieceMeshes(piece) : [mesh];
+
+    // The first tap of the double already selected the piece; undo that so
+    // it doesn't come back highlighted when it is shown again.
+    for (const part of meshes) {
+        pickHelper.deselectMesh(part);
+    }
+    hiddenParts.hide(meshes);
+    tutorialEvents.emit({ kind: 'part-hidden' });
+    syncState();
+}
+
+// -----------------------------------------------------------------------------
+// Exploded view: hold, then slide up / down
+// -----------------------------------------------------------------------------
+
+/** Share of the screen height a slide covers from assembled to fully exploded. */
+const EXPLODE_SLIDE_FRACTION = 0.4;
+
+let explodeModels: THREE.Object3D[] = [];
+
+/** The models holding the selection, in placement order. */
+function selectionModels(): THREE.Object3D[] {
+    const models = new Set<THREE.Object3D>();
+    for (const mesh of pickHelper.selectedMeshes) {
+        const model = findRootPlacedModel(mesh);
+        if (model) models.add(model);
+    }
+    return [...models];
+}
+
+function beginExplode(x: number, y: number): void {
+    explodeModels = selectionModels();
+    if (explodeModels.length === 0) {
+        explodeGauge.hide();
+        return;
+    }
+
+    explodeController.beginGesture(explodeModels);
+    navigator.vibrate?.(10);
+    explodeGauge.showActive(x, y, explodeController.getFactor(explodeModels[0]) / MAX_EXPLODE_FACTOR);
+}
+
+function updateExplode(dy: number): void {
+    if (explodeModels.length === 0) return;
+
+    const delta = (-dy / (window.innerHeight * EXPLODE_SLIDE_FRACTION)) * MAX_EXPLODE_FACTOR;
+    explodeController.updateGesture(delta);
+    explodeGauge.setValue(explodeController.getFactor(explodeModels[0]) / MAX_EXPLODE_FACTOR);
+}
+
+// -----------------------------------------------------------------------------
+// Moving a model: one-finger drag along the real surface, trash to delete
+// -----------------------------------------------------------------------------
+
+const raycaster = new THREE.Raycaster();
+
+/** The placed model under a screen point (CSS pixels), if it can be moved. */
+function movableModelAt(x: number, y: number): THREE.Object3D | null {
+    // pickAt takes XR screen axes, whose Y points down (top = -1), not NDC.
+    const axisX = (x / window.innerWidth) * 2 - 1;
+    const axisY = (y / window.innerHeight) * 2 - 1;
+    const mesh = pickHelper.pickAt(axisX, axisY, renderer, scene, perf);
+    const model = mesh ? findRootPlacedModel(mesh) : null;
+    // Only placed models know the real surface they slide on.
+    return model && (model.userData as PhysicalPose).surfacePosition ? model : null;
+}
+
+/** The real surface a model was placed on, as a plane in scene coordinates. */
+function supportPlane(model: THREE.Object3D): THREE.Plane {
+    const { surfacePosition, surfaceRotation } = model.userData as PhysicalPose;
+    const point = new THREE.Vector3();
+    const rotation = new THREE.Quaternion();
+    realToScene(xrRig, surfacePosition!, surfaceRotation!, point, rotation);
+    const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(rotation);
+    return new THREE.Plane().setFromNormalAndCoplanarPoint(normal, point);
+}
+
+/** Where the ray under a screen point (CSS pixels) meets a scene-space plane. */
+function planePointAt(x: number, y: number, plane: THREE.Plane): THREE.Vector3 | null {
+    const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : null;
+    const viewCamera = xrCamera?.cameras[0] ?? camera;
+    const ndc = new THREE.Vector2((x / window.innerWidth) * 2 - 1, 1 - (y / window.innerHeight) * 2);
+    raycaster.setFromCamera(ndc, viewCamera);
+    return raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+}
+
+/** Scene point to the real world, through the rig (the inverse of realToScene). */
+function sceneToReal(point: THREE.Vector3): THREE.Vector3 {
+    xrRig.updateMatrix();
+    return point.clone().applyMatrix4(xrRig.matrix.clone().invert());
+}
+
+let movePlane: THREE.Plane | null = null;
+
+function beginMove(model: THREE.Object3D, x: number, y: number): void {
+    const pose = model.userData as PhysicalPose;
+    movePlane = supportPlane(model);
+    move = {
+        model,
+        startPoint: planePointAt(x, y, movePlane),
+        startPhysical: pose.physicalPosition!.clone(),
+        startSurface: pose.surfacePosition!.clone(),
+    };
+    trashZone.show();
+    uiManager.setMoving(true);
+}
+
+/** Sets a model's placement pose: unit-scale scene position and real surface point. */
+function setModelPlacement(model: THREE.Object3D, physical: THREE.Vector3, surface: THREE.Vector3): void {
+    const pose = model.userData as PhysicalPose;
+    pose.physicalPosition = physical.clone();
+    pose.surfacePosition = surface.clone();
+    syncModelPosition(model);
+}
+
+/**
+ * Slides the model with the finger, along the real surface: the scene offset
+ * moves its unit-scale pose, and the same offset taken back to the real world
+ * moves the surface point its shadow receiver hangs on.
+ */
+function updateMove(x: number, y: number): void {
+    if (!move) return;
+    trashZone.setHot(trashZone.contains(x, y));
+
+    const point = move.startPoint && movePlane ? planePointAt(x, y, movePlane) : null;
+    if (!move.startPoint || !point) return;
+
+    const sceneDelta = point.clone().sub(move.startPoint);
+    const realDelta = sceneToReal(point).sub(sceneToReal(move.startPoint));
+    setModelPlacement(
+        move.model,
+        move.startPhysical.clone().addScaledVector(sceneDelta, 1 / rigScale),
+        move.startSurface.clone().add(realDelta),
+    );
+}
+
+function endMove(x: number, y: number): void {
+    if (!move) return;
+    const { model, startPhysical, startSurface } = move;
+    const droppedOnTrash = trashZone.contains(x, y);
+    move = null;
+    movePlane = null;
+    trashZone.hide();
+    uiManager.setMoving(false);
+
+    const pose = model.userData as PhysicalPose;
+    const endPhysical = pose.physicalPosition!.clone();
+    const endSurface = pose.surfacePosition!.clone();
+
+    if (droppedOnTrash) {
+        // Deleted from where it was picked up, so undoing brings it back there.
+        setModelPlacement(model, startPhysical, startSurface);
+        deleteModel(model);
+        return;
+    }
+
+    if (endSurface.distanceTo(startSurface) < 0.001) return;
+
+    tutorialEvents.emit({ kind: 'model-moved' });
+    historyManager.push({
+        description: 'Déplacer modèle',
+        undo: () => {
+            setModelPlacement(model, startPhysical, startSurface);
+        },
+        redo: () => {
+            setModelPlacement(model, endPhysical, endSurface);
+        },
+    });
+}
+
+// -----------------------------------------------------------------------------
+// Réinitialiser: the whole scene back to zero, as one undoable step
+// -----------------------------------------------------------------------------
 
 /**
  * Puts every placed model back on the real surface it was placed on, upright.
@@ -771,8 +992,8 @@ function reanchorModelsToSurface(): void {
 
         pose.physicalPosition = pose.surfacePosition.clone();
         pose.physicalRotation = pose.surfaceRotation.clone();
-        model.position.copy(pose.physicalPosition).multiplyScalar(rigScale);
         model.quaternion.copy(pose.physicalRotation);
+        syncModelPosition(model);
         // The root turned: the cached bounding-box pivot offset is stale.
         delete model.userData.pivotOffset;
     }
@@ -799,181 +1020,70 @@ function restoreModelPoses(poses: ModelPoses): void {
         const pose = model.userData as PhysicalPose;
         pose.physicalPosition = position.clone();
         pose.physicalRotation = rotation.clone();
-        model.position.copy(position).multiplyScalar(rigScale);
         model.quaternion.copy(rotation);
+        syncModelPosition(model);
         delete model.userData.pivotOffset;
     }
 }
 
+/** Every model in the scene, the dev model included. */
+function allModels(): THREE.Object3D[] {
+    return devModel ? [...placedModels, devModel] : placedModels;
+}
+
 /**
- * Undoes what a tutorial run leaves behind: hidden pieces, an exploded view,
- * a rotated rig and a changed perceived scale; placed models go back where
- * they were placed.
- *
- * Unlike the Réinitialiser button this needs no selection — the tour never
- * requires one.
+ * Everything back to zero: no selection, every piece shown, every model
+ * reassembled (and set back down) and back where it was placed, upright, and
+ * the view unrotated at 100%.
  */
-function resetSceneState(): void {
-    inspectMode.showAllHidden();
-    inspectMode.resetExplodeState();
-    explode(0);
+function doResetScene(): void {
+    clearSelection();
+    hiddenParts.showAll();
+    for (const model of allModels()) {
+        explodeController.setFactor(model, 0);
+    }
 
     sceneRotator.reset(xrRig);
     updateRigScale(1.0);
-    editMode.resetScaleState();
+    view.resetScaleState();
     reanchorModelsToSurface();
-    editMode.clearSelection();
-    pickHelper.clearSelection();
-    hierarchySlider.hide();
-
-    // The tour's actions were recorded as it went; undoing them now would
-    // replay state this reset just wiped.
-    historyManager.clearAll();
 }
 
-/**
- * Inverts the current piece selection in Inspect mode (or globally).
- */
-function invertSelection(): void {
-    if (modeManager.currentName === 'inspect') {
-        inspectMode.invertSelection();
-    } else {
-        pickHelper.invertSelection();
-    }
-}
-
-/**
- * Resets the model currently selected in Edit mode: reassembles its parts
- * (undoing explode and hidden pieces), restores its scale, resets the rig
- * rotation and perceived scale, and puts every placed model back where it
- * was placed.
- */
-function resetSelectedModel(): void {
-    const model = editMode.selectedModel;
-    if (!model) return;
-
-    // Snapshot state before reset
-    const prevModelPos = model.position.clone();
-    const prevModelQuat = model.quaternion.clone();
-    const prevModelScale = model.scale.clone();
-
-    const meshTransforms = new Map<THREE.Mesh, {
-        position: THREE.Vector3;
-        quaternion: THREE.Quaternion;
-        scale: THREE.Vector3;
-        visible: boolean;
-    }>();
-
-    model.traverse((child) => {
-        if (!(child instanceof THREE.Mesh)) return;
-        const mesh = child as THREE.Mesh;
-        meshTransforms.set(mesh, {
-            position: mesh.position.clone(),
-            quaternion: mesh.quaternion.clone(),
-            scale: mesh.scale.clone(),
-            visible: mesh.visible,
-        });
-    });
-
+/** Réinitialiser: {@link doResetScene}, as one undoable step. */
+function resetScene(): void {
     const previousRigScale = rigScale;
     const previousSceneTransform = sceneRotator.getTransform();
     const previousModelPoses = snapshotModelPoses();
-    const previousExplodeFactor = inspectMode.getExplodeFactor();
+    const previousFactors = new Map(allModels().map((model) => [model, explodeController.getFactor(model)]));
+    const previouslyHidden = [...hiddenParts.meshes];
 
-    doResetModel(model);
+    doResetScene();
 
-    historyManager.push('edit', {
-        description: 'Réinitialiser modèle',
+    historyManager.push({
+        description: 'Réinitialiser',
         undo: () => {
-            model.position.copy(prevModelPos);
-            model.quaternion.copy(prevModelQuat);
-            model.scale.copy(prevModelScale);
-
-            for (const [mesh, t] of meshTransforms) {
-                mesh.position.copy(t.position);
-                mesh.quaternion.copy(t.quaternion);
-                mesh.scale.copy(t.scale);
-                mesh.visible = t.visible;
-            }
-
             restoreModelPoses(previousModelPoses);
             sceneRotator.setTransform(previousSceneTransform, xrRig);
-            updateRigScale(previousRigScale);
-            editMode.setPerceivedScale(1 / previousRigScale);
-            inspectMode.setExplodeFactor(previousExplodeFactor);
-            editMode.selectModel(model);
+            view.setPerceivedScale(1 / previousRigScale);
+            for (const [model, factor] of previousFactors) {
+                explodeController.setFactor(model, factor);
+            }
+            hiddenParts.rehide(previouslyHidden);
         },
         redo: () => {
-            doResetModel(model);
-            editMode.selectModel(model);
+            doResetScene();
         },
     });
 }
 
 /**
- * Applies an exploded-view offset to every placed (and, in dev mode, the dev)
- * model. A factor of 0 restores the assembled pose; higher factors push each
- * part radially outward from its own model's center.
+ * Undoes what a tutorial run leaves behind, without recording it: the tour's
+ * actions were recorded as it went, and undoing them now would replay state
+ * this reset just wiped.
  */
-function explode(factor: number): void {
-    const models = devModel ? [...placedModels, devModel] : placedModels;
-
-    for (const model of models) {
-        prepareExplode(model);
-
-        model.traverse((child) => {
-            if (!(child instanceof THREE.Mesh)) return;
-            const rest = child.userData.explodeRest as THREE.Vector3 | undefined;
-            const dir = child.userData.explodeDir as THREE.Vector3 | undefined;
-            if (!rest || !dir) return;
-
-            child.position.copy(rest).addScaledVector(dir, factor);
-        });
-    }
-}
-
-/**
- * Caches, once per model, each part's assembled local position and the radial
- * direction (in that part's parent local space) that points away from the
- * model center. Precomputing keeps the per-gesture {@link explode} pass cheap.
- */
-function prepareExplode(model: THREE.Object3D): void {
-    if (model.userData.explodePrepared) return;
-
-    model.updateWorldMatrix(true, true);
-    const modelCenter = new THREE.Box3()
-        .setFromObject(model)
-        .getCenter(new THREE.Vector3());
-
-    const meshCenter = new THREE.Vector3();
-    const offset = new THREE.Vector3();
-    const parentInverse = new THREE.Matrix4();
-    const toParentLocal = new THREE.Matrix3();
-
-    model.traverse((child) => {
-        if (!(child instanceof THREE.Mesh)) return;
-        const mesh = child as THREE.Mesh;
-
-        mesh.geometry.computeBoundingBox();
-        const box = mesh.geometry.boundingBox;
-        if (!box) return;
-
-        // World-space center of this part...
-        box.getCenter(meshCenter).applyMatrix4(mesh.matrixWorld);
-        // ...as a radial offset from the model center, rotated/scaled into the
-        // part's parent local frame so it adds straight onto mesh.position.
-        offset.copy(meshCenter).sub(modelCenter);
-        if (mesh.parent) {
-            parentInverse.copy(mesh.parent.matrixWorld).invert();
-            toParentLocal.setFromMatrix4(parentInverse);
-            offset.applyMatrix3(toParentLocal);
-        }
-
-        mesh.userData.explodeRest = mesh.position.clone();
-        mesh.userData.explodeDir = offset.clone();
-    });
-
-    model.userData.explodePrepared = true;
+function resetSceneState(): void {
+    doResetScene();
+    historyManager.clear();
 }
 
 /**
@@ -1043,6 +1153,9 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     perf.frame(_timestamp);
     devTick?.();
 
+    hiddenParts.tick(lastFrameTime === null ? 0 : _timestamp - lastFrameTime);
+    lastFrameTime = _timestamp;
+
     if (isDevMode && spatialMappingOverlay) {
         spatialMappingOverlay.updateDev(camera);
     }
@@ -1082,7 +1195,7 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             }
 
             const placementArmed =
-                modeManager.currentName === 'edit' && editMode.isArmed;
+                modeManager.currentName === 'scene' && sceneMode.isArmed;
             if (pose && !spatialMappingOverlay.isComplete) {
                 // Still mapping: show where the surface is, but hold the ghost
                 // preview until the surface has stabilized.

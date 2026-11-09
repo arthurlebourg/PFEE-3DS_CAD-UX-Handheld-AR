@@ -9,23 +9,22 @@ interface CheatItem {
     effect: string;
 }
 
-const MODE_LABELS: Record<ModeName, string> = {
-    edit: 'Mode Édition',
-    inspect: 'Mode Inspection',
+/** Gestures that work everywhere, then those of each interaction state. */
+type SectionName = 'view' | ModeName;
+
+const SECTION_LABELS: Record<SectionName, string> = {
+    view: 'Partout',
+    scene: 'Sans sélection',
+    selection: 'Avec une sélection',
 };
 
 /**
- * The same gesture means different things per mode — a two-finger pinch scales
- * in Édition and explodes in Inspection — so the sheet is grouped by mode
- * rather than by gesture, with the mode you are in listed first.
+ * The view gestures mean the same everywhere; the one-finger gestures depend
+ * on whether something is selected. So the sheet opens with the view, then
+ * lists the state you are in before the other one.
  */
-const CHEATSHEET: Record<ModeName, CheatItem[]> = {
-    edit: [
-        {
-            glyph: 'tap',
-            gesture: 'Toucher',
-            effect: 'Poser le modèle armé, ou sélectionner un modèle déjà posé.',
-        },
+const CHEATSHEET: Record<SectionName, CheatItem[]> = {
+    view: [
         {
             glyph: 'pinch',
             gesture: 'Pincer à deux doigts',
@@ -42,19 +41,40 @@ const CHEATSHEET: Record<ModeName, CheatItem[]> = {
             effect: 'Incliner la scène, jusqu’à 90°.',
         },
     ],
-    inspect: [
-        { glyph: 'tap', gesture: 'Toucher', effect: 'Sélectionner une pièce du modèle.' },
+    scene: [
+        {
+            glyph: 'tap',
+            gesture: 'Toucher',
+            effect: 'Poser le modèle choisi, ou sélectionner une pièce.',
+        },
+        {
+            glyph: 'drag',
+            gesture: 'Glisser un doigt sur un modèle',
+            effect: 'Le déplacer sur la surface. Le lâcher sur la corbeille le supprime.',
+        },
+        {
+            glyph: 'ui-tap',
+            gesture: 'Réinitialiser',
+            effect: 'Remettre toute la scène à zéro : vue, modèles, pièces.',
+        },
+    ],
+    selection: [
+        {
+            glyph: 'tap',
+            gesture: 'Toucher',
+            effect: 'Ajouter ou retirer une pièce. Toucher le vide désélectionne tout.',
+        },
         {
             glyph: 'slide-y',
             gesture: 'Glisser sur le rail gauche',
             effect: 'Élargir la sélection à l’ensemble qui contient la pièce.',
         },
-        { glyph: 'double-tap', gesture: 'Double-toucher', effect: 'Masquer la pièce visée.' },
         {
-            glyph: 'pinch',
-            gesture: 'Pincer à deux doigts',
-            effect: 'Éclater la vue : les pièces s’écartent du centre du modèle.',
+            glyph: 'hold-up',
+            gesture: 'Maintenir ½ s, puis glisser',
+            effect: 'Vers le haut : éclater le modèle. Vers le bas : le rassembler.',
         },
+        { glyph: 'double-tap', gesture: 'Double-toucher', effect: 'Masquer la pièce visée.' },
     ],
 };
 
@@ -114,7 +134,9 @@ export class CheatSheet {
     }
 
     private render(mode: ModeName): void {
-        const ordered: ModeName[] = mode === 'edit' ? ['edit', 'inspect'] : ['inspect', 'edit'];
+        const ordered: SectionName[] = mode === 'scene'
+            ? ['view', 'scene', 'selection']
+            : ['view', 'selection', 'scene'];
 
         this.card.innerHTML = `
             <div class="ar-cs-head">
@@ -144,8 +166,8 @@ export class CheatSheet {
         this.card.appendChild(foot);
     }
 
-    private renderSection(mode: ModeName): string {
-        const rows = CHEATSHEET[mode]
+    private renderSection(section: SectionName): string {
+        const rows = CHEATSHEET[section]
             .map(
                 (item) => `
                 <div class="ar-cs-row">
@@ -159,8 +181,8 @@ export class CheatSheet {
             .join('');
 
         return `
-            <div class="ar-cs-section" data-mode="${mode}">
-                <div class="ar-cs-section-title">${MODE_LABELS[mode]}</div>
+            <div class="ar-cs-section" data-section="${section}">
+                <div class="ar-cs-section-title">${SECTION_LABELS[section]}</div>
                 ${rows}
             </div>`;
     }

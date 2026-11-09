@@ -25,7 +25,6 @@ export class PlacementOverlay {
     private lockStart = -Infinity;
 
     // ── DOM elements ─────────────────────────────────────────────────────────
-    private modeEl: HTMLDivElement;
     private distanceWarningEl: HTMLDivElement;
 
     constructor(scene: THREE.Scene) {
@@ -58,11 +57,6 @@ export class PlacementOverlay {
         this.reticle.renderOrder = 1; // avoid z-fighting with the floor
         scene.add(this.reticle);
 
-        // DOM mode indicator
-        this.modeEl = document.createElement('div');
-        this.modeEl.className = 'ar-mode-indicator';
-        this.modeEl.style.display = 'none';
-
         // DOM distance warning
         this.distanceWarningEl = document.createElement('div');
         this.distanceWarningEl.className = 'ar-distance-warning';
@@ -74,15 +68,12 @@ export class PlacementOverlay {
 
     /** Mounts DOM elements into the dom-overlay root. */
     public attach(parent: HTMLElement): void {
-        parent.appendChild(this.modeEl);
         parent.appendChild(this.distanceWarningEl);
-        this.modeEl.addEventListener('beforexrselect', (e) => e.preventDefault());
         this.distanceWarningEl.addEventListener('beforexrselect', (e) => e.preventDefault());
     }
 
     /** Toggles all overlay elements (call on XR session start/end). */
     public setVisible(visible: boolean): void {
-        this.modeEl.style.display = visible ? 'flex' : 'none';
         if (!visible) {
             this.hideReticle();
         }
@@ -141,58 +132,12 @@ export class PlacementOverlay {
         this.distanceWarningEl.style.display = 'none';
     }
 
-    /** Updates the mode pill label and colour. */
-    public setMode(mode: 'edit' | 'inspect'): void {
-        if (mode === 'edit') {
-            this.modeEl.className = 'ar-mode-indicator mode-edit';
-            this.modeEl.textContent = '⊕ Mode : Édition';
-        } else {
-            this.modeEl.className = 'ar-mode-indicator mode-inspect';
-            this.modeEl.textContent = '◈ Mode : Inspection';
-        }
-    }
-
     private injectStyles(): void {
         const id = 'ar-placement-overlay-styles';
         if (document.getElementById(id)) return;
         const style = document.createElement('style');
         style.id = id;
         style.textContent = `
-            .ar-mode-indicator {
-                position: fixed;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                display: flex;
-                align-items: center;
-                padding: 7px 18px;
-                border-radius: 999px;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-size: 13px;
-                font-weight: 700;
-                letter-spacing: 0.03em;
-                white-space: nowrap;
-                backdrop-filter: blur(12px);
-                -webkit-backdrop-filter: blur(12px);
-                border: 1px solid rgba(255,255,255,0.2);
-                box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-                z-index: 1200;
-                pointer-events: none;
-                user-select: none;
-                transition: background 0.3s, border-color 0.3s;
-                color: #fff;
-            }
-
-            .ar-mode-indicator.mode-edit {
-                background: rgba(0, 100, 220, 0.75);
-                border-color: rgba(100, 180, 255, 0.4);
-            }
-
-            .ar-mode-indicator.mode-inspect {
-                background: rgba(30, 140, 60, 0.75);
-                border-color: rgba(80, 220, 120, 0.4);
-            }
-
             .ar-distance-warning {
                 position: fixed;
                 bottom: 110px;

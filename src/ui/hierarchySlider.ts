@@ -15,7 +15,7 @@ const MAX_HEIGHT_RATIO = 0.6;
 
 /**
  * HierarchySlider: a vertical rail near the left edge stepping through the
- * granularity of the current Inspect selection, from the picked piece (bottom
+ * granularity of the current piece selection, from the picked piece (bottom
  * dot) up to the whole model (top dot), as built by the assembly tree.
  *
  * Shown while a piece is selected, hidden on deselection. A tap anywhere on

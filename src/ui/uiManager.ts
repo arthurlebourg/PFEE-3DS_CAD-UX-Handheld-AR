@@ -1,24 +1,23 @@
-import { createIcons, Settings, Layers, Eye, Activity, Pencil, Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark } from 'lucide';
+import { createIcons, Settings, Layers, Eye, Activity, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark, X, LogOut } from 'lucide';
 import type { ModeName } from '../modes/interactionMode.js';
 import { ModelPicker } from './modelPicker.js';
 
 export interface UIManagerCallbacks {
-    /**
-     * Requests an Edit/Inspect toggle. The ModeManager stays the source of
-     * truth and reflects the actual mode back through {@link UIManager.setMode}.
-     */
-    onModeToggle: () => void;
     /** A model was chosen in the model picker. */
     onModelSelect: (modelName: string) => void;
-    /** Delete the model currently selected in Edit mode. */
-    onDelete: () => void;
-    /** Reset the model currently selected in Edit mode. */
+    /** Resets the whole scene (view, models, explode, hidden pieces). */
     onReset: () => void;
-    /** Invert piece selection in Inspect mode. */
-    onInvertSelection?: () => void;
-    /** Undo the last action in the active mode. */
+    /** Inverts the piece selection. */
+    onInvertSelection: () => void;
+    /** Reveals every hidden piece. */
+    onShowAll: () => void;
+    /** Clears the selection, back to the Scene state. */
+    onCloseSelection: () => void;
+    /** Leaves the AR session. */
+    onExit: () => void;
+    /** Undo the last action. */
     onUndo: () => void;
-    /** Redo the last undone action in the active mode. */
+    /** Redo the last undone action. */
     onRedo: () => void;
     /** Dev only: toggle the picking-colours debug view. */
     onDebugToggle?: (showColors: boolean) => void;
@@ -32,19 +31,21 @@ export interface UIManagerCallbacks {
  * UI landmarks the tutorial can ring with its spotlight. Declared here because
  * this class owns the buttons; the tutorial only asks where they are.
  */
-export type UITarget = 'mode' | 'models' | 'model-actions' | 'help';
+export type UITarget = 'models' | 'reset' | 'toolbar' | 'help';
 
 /**
  * UIManager: Manages the 2D HTML buttons overlaying the WebXR scene.
  *
- * Quick-access column (always visible in session):
- *   - Mode toggle: shows the current mode at a glance (icon + colour + caption)
- *   - Modèles: opens the model picker (modal grid, see ModelPicker)
+ * What shows follows the interaction state, never a mode button:
+ *   - Scene (nothing selected): the quick column, bottom right, with
+ *     Réinitialiser (the whole scene) and Modèles (the model picker).
+ *   - Selection: the toolbar, bottom centre, with Inverser and Fermer; the
+ *     quick column hides to free the view.
+ *   - "Tout afficher (n)" joins the toolbar in both states while pieces are
+ *     hidden: a hidden piece can no longer be tapped to bring it back.
+ * Always there: Quitter and help (top left), Undo / Redo (top right).
  * Dev mode adds a gear radial menu with the debug buttons (picking colours,
  * perf stats); in prod the gear is omitted entirely.
- *
- * The mode button only *requests* a toggle; the ModeManager is the source of
- * truth and reflects the actual mode back through {@link setMode}.
  *
  * Activated via isDevMode (driven by ?dev=TOKEN in the URL, see devMode.ts).
  */
@@ -53,18 +54,19 @@ export class UIManager {
     public showPerf = false;
 
     private quickContainer = document.createElement('div');
-    private btnMode = document.createElement('button');
-    private modeCaption = document.createElement('span');
+    private btnReset = document.createElement('button');
     private btnModel = document.createElement('button');
     private btnHelp = document.createElement('button');
+    private btnExit = document.createElement('button');
     private readonly modelPicker: ModelPicker;
 
-    // Contextual buttons, shown while a placed model is selected in Edit mode
-    private btnDelete = document.createElement('button');
-    private btnReset = document.createElement('button');
-
-    // Contextual button, shown in Inspect mode
+    // Bottom-centre toolbar
+    private toolbar = document.createElement('div');
     private btnInvert = document.createElement('button');
+    private btnShowAll = document.createElement('button');
+    private showAllLabel = document.createElement('span');
+    private btnClose = document.createElement('button');
+
     // History buttons (Undo / Redo)
     private historyContainer = document.createElement('div');
     private btnUndo = document.createElement('button');
@@ -77,8 +79,12 @@ export class UIManager {
     private btnPerf: HTMLButtonElement | null = null;
 
     private isOpen = false;
+    private sessionActive = false;
     private activeModelName = '';
-    private mode: ModeName = 'edit';
+    private mode: ModeName = 'scene';
+    private hiddenCount = 0;
+    /** True while a model is dragged: the trash takes the toolbar's place. */
+    private moving = false;
     private readonly isDevMode: boolean;
 
     private readonly callbacks: UIManagerCallbacks;
@@ -89,51 +95,54 @@ export class UIManager {
 
         this.injectStyles();
 
-        // Quick-access column: mode toggle + model picker button
+        // Quick-access column: reset + model picker button
         this.quickContainer.className =
             'ar-quick-container' + (isDevMode ? ' with-gear' : '');
-        this.quickContainer.style.display = 'none';
 
-        this.btnMode.className = 'ar-quick-btn btn-mode edit';
-        this.modeCaption.className = 'ar-quick-caption';
-        const modeItem = document.createElement('div');
-        modeItem.className = 'ar-quick-item';
-        modeItem.append(this.btnMode, this.modeCaption);
+        this.btnReset.className = 'ar-quick-btn btn-reset';
+        this.btnReset.innerHTML = `<i data-lucide="rotate-ccw"></i>`;
+        this.btnReset.setAttribute('aria-label', 'Réinitialiser la scène');
 
         this.btnModel.className = 'ar-quick-btn btn-model';
         this.btnModel.innerHTML = `<i data-lucide="layers"></i>`;
         this.btnModel.setAttribute('aria-label', 'Choisir un modèle');
         this.btnModel.setAttribute('aria-haspopup', 'dialog');
         this.btnModel.setAttribute('aria-expanded', 'false');
-        const modelCaption = document.createElement('span');
-        modelCaption.className = 'ar-quick-caption';
-        modelCaption.textContent = 'Modèles';
-        const modelItem = document.createElement('div');
-        modelItem.className = 'ar-quick-item';
-        modelItem.append(this.btnModel, modelCaption);
 
-        this.quickContainer.append(modeItem, modelItem);
+        this.quickContainer.append(
+            this.quickItem(this.btnReset, 'Réinitialiser'),
+            this.quickItem(this.btnModel, 'Modèles'),
+        );
 
-        // Help sits top-left, away from the quick column: a third item there
-        // would push the column past the top of a phone held in landscape.
+        // Quitter and help share the top-left corner, away from the toolbar.
+        this.btnExit.className = 'ar-exit-btn';
+        this.btnExit.innerHTML = `<i data-lucide="log-out"></i>`;
+        this.btnExit.setAttribute('aria-label', 'Quitter la réalité augmentée');
+
         this.btnHelp.className = 'ar-help-btn';
         this.btnHelp.innerHTML = `<i data-lucide="circle-question-mark"></i>`;
         this.btnHelp.setAttribute('aria-label', 'Aide : gestes');
 
-        // Contextual Delete/Reset buttons (hidden until a model is selected)
-        this.btnDelete.className = 'ar-delete-btn';
-        this.btnDelete.innerHTML = `<i data-lucide="trash-2">`;
-        this.btnReset.className = 'ar-reset-btn';
-        this.btnReset.innerHTML = `<i data-lucide="rotate-ccw">`;
+        // Toolbar: selection actions, plus "Tout afficher" while pieces are hidden
+        this.toolbar.className = 'ar-toolbar';
+        this.toolbar.setAttribute('role', 'toolbar');
 
-        // Contextual Invert Selection button (shown in Inspect mode)
-        this.btnInvert.className = 'ar-invert-btn';
-        this.btnInvert.setAttribute('title', 'Inverser la sélection');
+        this.btnInvert.className = 'ar-tool-btn btn-invert';
+        this.btnInvert.innerHTML = `<i data-lucide="flip-horizontal"></i><span>Inverser</span>`;
         this.btnInvert.setAttribute('aria-label', 'Inverser la sélection');
-        this.btnInvert.innerHTML = `<i data-lucide="flip-horizontal"></i>`;
+
+        this.btnShowAll.className = 'ar-tool-btn btn-show-all';
+        this.btnShowAll.innerHTML = `<i data-lucide="eye"></i>`;
+        this.btnShowAll.appendChild(this.showAllLabel);
+
+        this.btnClose.className = 'ar-tool-btn btn-close';
+        this.btnClose.innerHTML = `<i data-lucide="x"></i><span>Fermer</span>`;
+        this.btnClose.setAttribute('aria-label', 'Fermer la sélection');
+
+        this.toolbar.append(this.btnInvert, this.btnShowAll, this.btnClose);
+
         // History buttons (Undo / Redo)
         this.historyContainer.className = 'ar-history-container';
-        this.historyContainer.style.display = 'none';
 
         this.btnUndo.className = 'ar-history-btn btn-undo disabled';
         this.btnUndo.innerHTML = `<i data-lucide="undo"></i>`;
@@ -149,7 +158,6 @@ export class UIManager {
 
         // Dev-only gear radial menu (debug buttons)
         this.container.className = 'ar-menu-container';
-        this.container.style.display = 'none';
         this.btnGear.className = 'ar-menu-btn ar-btn-gear';
         this.btnGear.innerHTML = `<i data-lucide="settings"></i>`;
         if (isDevMode) {
@@ -171,8 +179,7 @@ export class UIManager {
         }
 
         // Wire up events
-        this.addPointerDownListener(this.btnMode,   () => this.callbacks.onModeToggle());
-        this.addPointerDownListener(this.btnModel,  () => this.toggleModelPanel());
+        this.addPointerDownListener(this.btnModel,   () => this.toggleModelPanel());
         // pointerdown never fires from the keyboard; a click handler would
         // double-toggle after a tap, so Enter/Space are wired explicitly.
         this.btnModel.addEventListener('keydown', (event) => {
@@ -181,41 +188,40 @@ export class UIManager {
                 this.toggleModelPanel();
             }
         });
-        this.addPointerDownListener(this.btnGear,   () => this.toggleGear());
-        this.addPointerDownListener(this.btnDelete, () => this.callbacks.onDelete());
-        this.addPointerDownListener(this.btnReset,  () => this.callbacks.onReset());
-        this.addPointerDownListener(this.btnInvert, () => this.callbacks.onInvertSelection?.());
-        this.addPointerDownListener(this.btnUndo,   () => {
+        this.addPointerDownListener(this.btnReset,   () => this.callbacks.onReset());
+        this.addPointerDownListener(this.btnGear,    () => this.toggleGear());
+        this.addPointerDownListener(this.btnInvert,  () => this.callbacks.onInvertSelection());
+        this.addPointerDownListener(this.btnShowAll, () => this.callbacks.onShowAll());
+        this.addPointerDownListener(this.btnClose,   () => this.callbacks.onCloseSelection());
+        this.addPointerDownListener(this.btnExit,    () => this.callbacks.onExit());
+        this.addPointerDownListener(this.btnUndo,    () => {
             if (!this.btnUndo.classList.contains('disabled')) {
                 this.callbacks.onUndo();
             }
         });
-        this.addPointerDownListener(this.btnRedo,   () => {
+        this.addPointerDownListener(this.btnRedo,    () => {
             if (!this.btnRedo.classList.contains('disabled')) {
                 this.callbacks.onRedo();
             }
         });
-        this.addPointerDownListener(this.btnHelp,   () => this.callbacks.onHelp?.());
+        this.addPointerDownListener(this.btnHelp,    () => this.callbacks.onHelp?.());
         if (this.btnDebug) this.addPointerDownListener(this.btnDebug, () => this.toggleDebug());
         if (this.btnPerf)  this.addPointerDownListener(this.btnPerf,  () => this.togglePerf());
 
         // Prevent XR select events from bubbling through the overlay
-        this.quickContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.container.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.btnDelete.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.btnReset.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.btnInvert.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.historyContainer.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.btnUndo.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.btnRedo.addEventListener('beforexrselect', (e) => e.preventDefault());
-        this.btnHelp.addEventListener('beforexrselect', (e) => e.preventDefault());
-
-        this.updateUI();
+        for (const element of [
+            this.quickContainer, this.container, this.toolbar, this.historyContainer,
+            this.btnHelp, this.btnExit,
+        ]) {
+            element.addEventListener('beforexrselect', (e) => e.preventDefault());
+        }
 
         const buttons: HTMLButtonElement[] = [this.btnGear];
         if (this.btnDebug) buttons.push(this.btnDebug);
         if (this.btnPerf)  buttons.push(this.btnPerf);
         this.container.append(...buttons);
+
+        this.updateUI();
     }
 
     /**
@@ -227,10 +233,9 @@ export class UIManager {
             parent.appendChild(this.container);
         }
         this.modelPicker.attach(parent);
-        parent.appendChild(this.btnDelete);
-        parent.appendChild(this.btnReset);
-        parent.appendChild(this.btnInvert);
+        parent.appendChild(this.toolbar);
         parent.appendChild(this.historyContainer);
+        parent.appendChild(this.btnExit);
         parent.appendChild(this.btnHelp);
 
         this.hydrateIcons();
@@ -240,47 +245,42 @@ export class UIManager {
     // Public API
     // -------------------------------------------------------------------------
 
-    /**
-     * Reflects the active interaction mode (called by the ModeManager's
-     * onChange). The toggle button itself carries the mode state: icon,
-     * colour and caption.
-     */
+    /** Reflects the active interaction state (called by the ModeManager's onChange). */
     public setMode(mode: ModeName): void {
         this.mode = mode;
+        if (mode === 'selection') {
+            this.modelPicker.close();
+        }
         this.updateUI();
     }
 
-    /** Shows/hides the contextual Delete/Reset buttons (Edit model selection). */
-    public setModelActionsVisible(visible: boolean): void {
-        this.btnDelete.classList.toggle('visible', visible);
-        this.btnReset.classList.toggle('visible', visible);
+    /** Number of hidden pieces: shows "Tout afficher (n)" while it is not 0. */
+    public setHiddenCount(count: number): void {
+        this.hiddenCount = count;
+        this.updateUI();
+    }
+
+    /** Hides the toolbar while a model is dragged, so it never covers the trash. */
+    public setMoving(moving: boolean): void {
+        this.moving = moving;
+        this.updateUI();
     }
 
     /**
      * Bounding box of a UI landmark, for the tutorial's spotlight ring.
-     * A hidden contextual button is scaled to 0 and reports an empty rect,
-     * which the overlay reads as "nothing to point at".
+     * A hidden element reports an empty rect, which the overlay reads as
+     * "nothing to point at".
      */
     public getSpotlightRect(target: UITarget): DOMRect | null {
         switch (target) {
-            case 'mode':
-                return this.btnMode.getBoundingClientRect();
             case 'models':
                 return this.btnModel.getBoundingClientRect();
+            case 'reset':
+                return this.btnReset.getBoundingClientRect();
+            case 'toolbar':
+                return this.toolbar.getBoundingClientRect();
             case 'help':
                 return this.btnHelp.getBoundingClientRect();
-            case 'model-actions': {
-                const remove = this.btnDelete.getBoundingClientRect();
-                const reset = this.btnReset.getBoundingClientRect();
-                const left = Math.min(remove.left, reset.left);
-                const top = Math.min(remove.top, reset.top);
-                return new DOMRect(
-                    left,
-                    top,
-                    Math.max(remove.right, reset.right) - left,
-                    Math.max(remove.bottom, reset.bottom) - top,
-                );
-            }
         }
     }
 
@@ -291,36 +291,36 @@ export class UIManager {
     }
 
     public toggleVisibility(show: boolean): void {
-        this.quickContainer.style.display = show ? 'flex' : 'none';
-        this.historyContainer.style.display = show ? 'flex' : 'none';
-        this.btnHelp.classList.toggle('visible', show);
-        if (this.isDevMode) {
-            this.container.style.display = show ? 'block' : 'none';
-        }
+        this.sessionActive = show;
         if (!show) {
             this.isOpen = false;
             this.container.classList.remove('open');
             this.modelPicker.close();
-            this.btnDelete.classList.remove('visible');
-            this.btnReset.classList.remove('visible');
-            this.btnInvert.classList.remove('visible');
             this.showPickingColors = false;
             this.showPerf = false;
-            this.updateUI();
-        } else {
-            this.updateUI();
         }
+        this.updateUI();
     }
 
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
 
+    private quickItem(button: HTMLButtonElement, caption: string): HTMLDivElement {
+        const label = document.createElement('span');
+        label.className = 'ar-quick-caption';
+        label.textContent = caption;
+        const item = document.createElement('div');
+        item.className = 'ar-quick-item';
+        item.append(button, label);
+        return item;
+    }
+
     private hydrateIcons(): void {
         createIcons({
             icons: {
-                Settings, Layers, Eye, Activity, Pencil,
-                Search, Trash2, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark,
+                Settings, Layers, Eye, Activity, RotateCcw, FlipHorizontal,
+                Undo, Redo, CircleQuestionMark, X, LogOut,
             }
         });
     }
@@ -358,7 +358,6 @@ export class UIManager {
 
     private selectModel(modelName: string): void {
         this.activeModelName = modelName;
-        this.updateUI();
         this.callbacks.onModelSelect(modelName);
         this.modelPicker.close();
     }
@@ -380,16 +379,27 @@ export class UIManager {
     // -------------------------------------------------------------------------
 
     private updateUI(): void {
-        // Mode toggle button: the button IS the mode indicator
-        if (this.mode === 'edit') {
-            this.btnMode.className = 'ar-quick-btn btn-mode edit';
-            this.btnMode.innerHTML = `<i data-lucide="pencil"></i>`;
-            this.modeCaption.textContent = 'Édition';
-        } else {
-            this.btnMode.className = 'ar-quick-btn btn-mode inspect';
-            this.btnMode.innerHTML = `<i data-lucide="search"></i>`;
-            this.modeCaption.textContent = 'Inspection';
-        }
+        const selecting = this.mode === 'selection';
+        const active = this.sessionActive;
+
+        this.quickContainer.classList.toggle('visible', active && !selecting);
+        this.historyContainer.classList.toggle('visible', active);
+        this.btnHelp.classList.toggle('visible', active);
+        this.btnExit.classList.toggle('visible', active && !this.isDevMode);
+        this.container.style.display = active && this.isDevMode ? 'block' : 'none';
+
+        this.btnInvert.classList.toggle('shown', selecting);
+        this.btnClose.classList.toggle('shown', selecting);
+        this.btnShowAll.classList.toggle('shown', this.hiddenCount > 0);
+        this.showAllLabel.textContent = `Tout afficher (${String(this.hiddenCount)})`;
+        this.btnShowAll.setAttribute(
+            'aria-label',
+            `Tout afficher : ${String(this.hiddenCount)} pièce(s) masquée(s)`,
+        );
+        this.toolbar.classList.toggle(
+            'visible',
+            active && !this.moving && (selecting || this.hiddenCount > 0),
+        );
 
         // Debug button (dev only)
         if (this.btnDebug) {
@@ -414,16 +424,6 @@ export class UIManager {
                 perfLabel.textContent = 'Statistiques: OFF';
             }
         }
-
-        // Invert button: visible in inspect mode when UI is active
-        const isSessionActive = this.quickContainer.style.display !== 'none';
-        this.btnInvert.classList.toggle('visible', isSessionActive && this.mode === 'inspect');
-
-        // The mode button was just rewritten as a bare <i data-lucide> placeholder,
-        // which draws nothing until Lucide swaps it for an <svg>. Re-hydrating here
-        // rather than in each caller keeps every path through updateUI honest —
-        // selecting a model used to leave the mode button blank.
-        this.hydrateIcons();
     }
 
     // -------------------------------------------------------------------------
@@ -442,12 +442,14 @@ export class UIManager {
                 position: absolute;
                 bottom: 30px;
                 right: 30px;
-                display: flex;
+                display: none;
                 flex-direction: column;
                 align-items: center;
                 gap: 18px;
                 z-index: 1000;
             }
+
+            .ar-quick-container.visible { display: flex; }
 
             /* Leave room for the dev gear menu below */
             .ar-quick-container.with-gear { bottom: 115px; }
@@ -481,18 +483,6 @@ export class UIManager {
 
             .ar-quick-btn:active { transform: scale(0.92); }
 
-            .ar-quick-btn.btn-mode.edit {
-                background: rgba(0, 123, 255, 0.85);
-                border-color: rgba(0, 123, 255, 0.5);
-                box-shadow: 0 0 15px rgba(0, 123, 255, 0.5);
-            }
-
-            .ar-quick-btn.btn-mode.inspect {
-                background: rgba(40, 167, 69, 0.85);
-                border-color: rgba(40, 167, 69, 0.5);
-                box-shadow: 0 0 15px rgba(40, 167, 69, 0.5);
-            }
-
             .ar-quick-btn.btn-model.active {
                 background: rgba(0, 123, 255, 0.35);
                 border-color: rgba(0, 123, 255, 0.6);
@@ -511,10 +501,10 @@ export class UIManager {
                 pointer-events: none;
             }
 
-            .ar-help-btn {
+            .ar-help-btn,
+            .ar-exit-btn {
                 position: absolute;
-                top: 20px;
-                left: 20px;
+                top: max(20px, env(safe-area-inset-top, 20px));
                 width: 44px;
                 height: 44px;
                 border-radius: 50%;
@@ -533,9 +523,69 @@ export class UIManager {
                 padding: 0;
             }
 
-            .ar-help-btn.visible { display: flex; }
-            .ar-help-btn:active { transform: scale(0.92); }
-            .ar-help-btn svg { width: 22px; height: 22px; }
+            .ar-exit-btn { left: max(20px, env(safe-area-inset-left, 20px)); }
+            /* Help sits next to Quitter; in dev mode (no Quitter) it takes the corner. */
+            .ar-help-btn { left: max(20px, env(safe-area-inset-left, 20px)); }
+            .ar-exit-btn.visible ~ .ar-help-btn { left: calc(max(20px, env(safe-area-inset-left, 20px)) + 56px); }
+
+            .ar-help-btn.visible,
+            .ar-exit-btn.visible { display: flex; }
+            .ar-help-btn:active,
+            .ar-exit-btn:active { transform: scale(0.92); }
+            .ar-help-btn svg,
+            .ar-exit-btn svg { width: 22px; height: 22px; }
+
+            .ar-toolbar {
+                position: absolute;
+                left: 50%;
+                bottom: max(24px, env(safe-area-inset-bottom, 24px));
+                transform: translate(-50%, 16px);
+                display: flex;
+                gap: 6px;
+                padding: 6px;
+                border-radius: 18px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                background: rgba(20, 20, 25, 0.8);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+                z-index: 1000;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.25s, transform 0.25s;
+            }
+
+            .ar-toolbar.visible {
+                opacity: 1;
+                transform: translate(-50%, 0);
+                pointer-events: auto;
+            }
+
+            .ar-tool-btn {
+                display: none;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
+                min-width: 72px;
+                min-height: 56px;
+                padding: 6px 10px;
+                border: none;
+                border-radius: 12px;
+                background: transparent;
+                color: #fff;
+                font-size: 11px;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-weight: 600;
+                white-space: nowrap;
+                cursor: pointer;
+                outline: none;
+            }
+
+            .ar-tool-btn.shown { display: flex; }
+            .ar-tool-btn:active { background: rgba(255, 255, 255, 0.15); }
+            .ar-tool-btn svg { width: 22px; height: 22px; stroke: currentColor; }
+            .ar-tool-btn.btn-invert { color: #ffa500; }
 
             .ar-menu-container {
                 position: absolute;
@@ -635,198 +685,18 @@ export class UIManager {
                 transform: translateY(-50%) scale(1);
             }
 
-            .ar-delete-btn {
-                position: absolute;
-                bottom: 30px;
-                left: 30px;
-                width: 60px;
-                height: 60px;
-                border-radius: 50%;
-                border: 1px solid rgba(220, 53, 69, 0.4);
-                background: rgba(220, 53, 69, 0.25);
-                backdrop-filter: blur(10px);
-                -webkit-backdrop-filter: blur(10px);
-                color: #ff4a5a;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                box-shadow: 0 8px 32px 0 rgba(220, 53, 69, 0.2);
-                z-index: 1000;
-                opacity: 0;
-                transform: scale(0);
-                pointer-events: none;
-                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-                outline: none;
-                padding: 0;
-            }
-
-            .ar-delete-btn.visible {
-                opacity: 1;
-                transform: scale(1);
-                pointer-events: auto;
-            }
-
-            .ar-delete-btn:active {
-                transform: scale(0.9);
-                background: rgba(220, 53, 69, 0.4);
-                box-shadow: 0 0 15px rgba(220, 53, 69, 0.5);
-            }
-
-            .ar-delete-btn svg {
-                width: 24px;
-                height: 24px;
-                stroke: currentColor;
-            }
-
-            .ar-delete-label {
-                position: absolute;
-                left: 70px;
-                top: 50%;
-                transform: translateY(-50%) scale(0.8);
-                background: rgba(220, 53, 69, 0.85);
-                border: 1px solid rgba(220, 53, 69, 0.4);
-                color: #fff;
-                padding: 5px 10px;
-                border-radius: 6px;
-                font-size: 11px;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-weight: 600;
-                white-space: nowrap;
-                opacity: 0;
-                pointer-events: none;
-                transition: opacity 0.3s, transform 0.3s;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            }
-
-            .ar-delete-btn.visible .ar-delete-label {
-                opacity: 1;
-                transform: translateY(-50%) scale(1);
-            }
-
-            .ar-reset-btn {
-                position: absolute;
-                bottom: 105px;
-                left: 30px;
-                width: 60px;
-                height: 60px;
-                border-radius: 50%;
-                border: 1px solid rgba(0, 123, 255, 0.4);
-                background: rgba(0, 123, 255, 0.25);
-                backdrop-filter: blur(10px);
-                -webkit-backdrop-filter: blur(10px);
-                color: #38bdf8;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                box-shadow: 0 8px 32px 0 rgba(0, 123, 255, 0.2);
-                z-index: 1000;
-                opacity: 0;
-                transform: scale(0);
-                pointer-events: none;
-                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-                outline: none;
-                padding: 0;
-            }
-
-            .ar-reset-btn.visible {
-                opacity: 1;
-                transform: scale(1);
-                pointer-events: auto;
-            }
-
-            .ar-reset-btn:active {
-                transform: scale(0.9);
-                background: rgba(0, 123, 255, 0.4);
-                box-shadow: 0 0 15px rgba(0, 123, 255, 0.5);
-            }
-
-            .ar-reset-btn svg {
-                width: 24px;
-                height: 24px;
-                stroke: currentColor;
-            }
-
-            .ar-reset-label {
-                position: absolute;
-                left: 70px;
-                top: 50%;
-                transform: translateY(-50%) scale(0.8);
-                background: rgba(0, 123, 255, 0.85);
-                border: 1px solid rgba(0, 123, 255, 0.4);
-                color: #fff;
-                padding: 5px 10px;
-                border-radius: 6px;
-                font-size: 11px;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-weight: 600;
-                white-space: nowrap;
-                opacity: 0;
-                pointer-events: none;
-                transition: opacity 0.3s, transform 0.3s;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            }
-
-            .ar-reset-btn.visible .ar-reset-label {
-                opacity: 1;
-                transform: translateY(-50%) scale(1);
-            }
-
-            .ar-invert-btn {
-                position: absolute;
-                bottom: 180px;
-                left: 30px;
-                width: 60px;
-                height: 60px;
-                border-radius: 50%;
-                border: 1px solid rgba(255, 140, 0, 0.4);
-                background: rgba(255, 140, 0, 0.25);
-                backdrop-filter: blur(10px);
-                -webkit-backdrop-filter: blur(10px);
-                color: #ffa500;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                box-shadow: 0 8px 32px 0 rgba(255, 140, 0, 0.2);
-                z-index: 1000;
-                opacity: 0;
-                transform: scale(0);
-                pointer-events: none;
-                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-                outline: none;
-                padding: 0;
-            }
-
-            .ar-invert-btn.visible {
-                opacity: 1;
-                transform: scale(1);
-                pointer-events: auto;
-            }
-
-            .ar-invert-btn:active {
-                transform: scale(0.9);
-                background: rgba(255, 140, 0, 0.45);
-                box-shadow: 0 0 15px rgba(255, 140, 0, 0.5);
-            }
-
-            .ar-invert-btn svg {
-                width: 24px;
-                height: 24px;
-                stroke: currentColor;
-            }
-
             .ar-history-container {
                 position: absolute;
                 top: max(20px, env(safe-area-inset-top, 20px));
                 right: max(20px, env(safe-area-inset-right, 20px));
-                display: flex;
+                display: none;
                 align-items: center;
                 gap: 10px;
                 z-index: 1000;
                 pointer-events: auto;
             }
+
+            .ar-history-container.visible { display: flex; }
 
             .ar-history-btn {
                 width: 42px;

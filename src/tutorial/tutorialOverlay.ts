@@ -1,4 +1,3 @@
-import type { ModeName } from '../modes/interactionMode.js';
 import type { UITarget } from '../ui/uiManager.js';
 import { glyphSvg } from './gestureGlyphs.js';
 import type { TutorialStep } from './tutorialSteps.js';
@@ -16,22 +15,12 @@ export interface TutorialOverlayCallbacks {
     onClose: () => void;
 }
 
-const ACCENTS: Record<ModeName, string> = {
-    edit: '#007bff',
-    inspect: '#28a745',
-};
-
-const MODE_LABELS: Record<ModeName, string> = {
-    edit: 'Édition',
-    inspect: 'Inspection',
-};
-
 /**
  * TutorialOverlay: everything the tutorial draws.
  *
  * Two rules shape the layout. The card sits at the *top* — the bottom third
- * already holds the quick column (right) and the contextual Supprimer /
- * Réinitialiser (left), and the middle has to stay clear to practise in. And
+ * already holds the quick column (right) and the selection toolbar (centre),
+ * and the middle has to stay clear to practise in. And
  * the card is `pointer-events: none` except for its own buttons, so a tap
  * aimed at the scene during a practice step goes to the scene.
  */
@@ -100,7 +89,6 @@ export class TutorialOverlay {
     public showWelcome(stepCount: number): void {
         this.card.classList.remove('visible');
         this.setSpotlight(null, false);
-        this.setAccent('edit');
 
         this.renderModal({
             kicker: 'Prise en main',
@@ -141,14 +129,8 @@ export class TutorialOverlay {
         this.setSpotlight(null, false);
     }
 
-    public showStep(
-        step: TutorialStep,
-        index: number,
-        total: number,
-        mode: ModeName,
-    ): void {
+    public showStep(step: TutorialStep, index: number, total: number): void {
         this.modal.classList.remove('visible');
-        this.setAccent(mode);
 
         this.glyphBox.innerHTML = glyphSvg(step.glyph);
         this.kicker.textContent = `Étape ${String(index + 1)} / ${String(total)}`;
@@ -162,23 +144,9 @@ export class TutorialOverlay {
         this.btnSkipStep.classList.remove('visible');
     }
 
-    /** Nudges the user back to the mode the current gesture lives in. */
-    public setBlocked(requiredMode: ModeName | null): void {
-        if (!requiredMode) {
-            this.setNote(null);
-            return;
-        }
-        this.setNote(
-            `Revenez en mode ${MODE_LABELS[requiredMode]} pour continuer.`,
-            'blocked',
-        );
-    }
-
     /** Reveals the step's hint and the per-step skip escape. */
     public showHint(hint: string): void {
-        if (!this.note.classList.contains('blocked')) {
-            this.setNote(`Astuce : ${hint}`, 'hint');
-        }
+        this.setNote(`Astuce : ${hint}`, 'hint');
         this.btnSkipStep.classList.add('visible');
     }
 
@@ -311,7 +279,7 @@ export class TutorialOverlay {
         }
     }
 
-    private setNote(text: string | null, kind?: 'hint' | 'blocked'): void {
+    private setNote(text: string | null, kind?: 'hint'): void {
         this.note.className = 'ar-tut-note';
         if (!text) {
             this.note.textContent = '';
@@ -320,10 +288,6 @@ export class TutorialOverlay {
         this.note.textContent = text;
         this.note.classList.add('visible');
         if (kind) this.note.classList.add(kind);
-    }
-
-    private setAccent(mode: ModeName): void {
-        this.root.style.setProperty('--ar-tut-accent', ACCENTS[mode]);
     }
 
     private onPointerDown(element: HTMLElement, callback: () => void): void {
