@@ -20,6 +20,7 @@ import { TutorialEventBus } from './tutorial/tutorialEvents.js';
 import { TutorialManager } from './tutorial/tutorialManager.js';
 import { PlacementOverlay } from './ui/placementOverlay.js';
 import { HierarchySlider } from './ui/hierarchySlider.js';
+import { DirectionalIndicator } from './ui/directionalIndicator.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 const modelUrls: Record<string, string> = {};
@@ -67,6 +68,7 @@ let gestureRecognizer: GestureRecognizer;
 let modeManager: ModeManager;
 let tutorial: TutorialManager;
 let placementOverlay: PlacementOverlay;
+let directionalIndicator: DirectionalIndicator;
 
 /**
  * The tutorial observes the app through this bus. Emitting is the app's only
@@ -155,6 +157,8 @@ function init(): void {
 
     uiManager.attach(document.body);
     placementOverlay.attach(document.body);
+    directionalIndicator = new DirectionalIndicator();
+    directionalIndicator.attach(document.body);
     historyManager.notifyActiveState();
     sceneRotator = new SceneRotator();
 
@@ -322,6 +326,7 @@ function init(): void {
             tutorial.stop();
             spatialMappingOverlay.hide();
             placementOverlay.setVisible(false);
+            directionalIndicator.hide();
         });
     }
 
@@ -947,6 +952,34 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
             spatialMappingOverlay.updateWebXR(hasSurface);
         }
     }
+
+    // Update directional indicator if a model is placed/active
+    let targetModel: THREE.Object3D | null = null;
+    if (editMode?.selectedModel) {
+        targetModel = editMode.selectedModel;
+    } else if (isDevMode && devModel) {
+        targetModel = devModel;
+    } else if (placedModels.length > 0) {
+        if (placedModels.length === 1) {
+            targetModel = placedModels[0];
+        } else {
+            let closestDist = Infinity;
+            const camPos = new THREE.Vector3();
+            camera.getWorldPosition(camPos);
+            const modelPos = new THREE.Vector3();
+            for (const m of placedModels) {
+                m.getWorldPosition(modelPos);
+                const dist = camPos.distanceTo(modelPos);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    targetModel = m;
+                }
+            }
+        }
+    }
+
+    directionalIndicator?.update(camera, targetModel);
+
     if (uiManager.showPickingColors) {
         pickHelper.renderPickingDebug(renderer, scene, camera);
     } else {
