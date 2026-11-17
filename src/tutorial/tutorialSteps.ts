@@ -136,7 +136,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     {
         id: 'hide-part',
         title: 'Masquer une pièce',
-        body: 'Double-touchez une pièce pour la masquer et découvrir ce qu\'elle recouvre. « Tout afficher », en bas, la fait revenir.',
+        body: 'Double-touchez une pièce pour la masquer et découvrir ce qu\'elle recouvre. « Show all », en bas, la fait revenir.',
         glyph: 'double-tap',
         hint: 'Enchaînez les deux touchers rapidement, au même endroit.',
         isComplete: (event) => event.kind === 'part-hidden',

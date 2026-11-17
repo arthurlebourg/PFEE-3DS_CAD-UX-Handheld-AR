@@ -294,9 +294,9 @@ export function injectTutorialStyles(): void {
             }
 
             .ar-cs-glyph { flex: 0 0 34px; width: 34px; height: 34px; }
-            .ar-cs-gesture { font-size: 13px; font-weight: 600; }
+            .ar-cs-item-title, .ar-cs-gesture { font-size: 13px; font-weight: 600; }
 
-            .ar-cs-effect {
+            .ar-cs-item-desc, .ar-cs-effect {
                 font-size: 12px;
                 line-height: 1.4;
                 color: rgba(255, 255, 255, 0.62);

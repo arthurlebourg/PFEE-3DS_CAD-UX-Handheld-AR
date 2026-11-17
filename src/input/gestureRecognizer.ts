@@ -19,7 +19,7 @@ const TILT_ENGAGE_PX = 20;
 const UI_SELECTOR =
     '.ar-menu-container, .ar-model-panel, .ar-quick-container, .ar-toolbar, .ar-exit-btn, ' +
     '.ar-scan-overlay, .ar-scan-toast, .ar-scan-card, .ar-history-container, .ar-history-btn, ' +
-    '.ar-help-btn, .ar-tutorial-card, .ar-tutorial-modal, .ar-cheatsheet, .ar-hierarchy-slider';
+    '.ar-help-btn, .ar-tutorial-card, .ar-tutorial-modal, .ar-cheatsheet, .ar-hierarchy-slider, .ar-exit-modal';
 
 /**
  * Gesture vocabulary, as classified here. Observers get the raw gesture — what
