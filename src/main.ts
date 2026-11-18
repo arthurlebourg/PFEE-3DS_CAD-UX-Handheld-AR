@@ -24,6 +24,7 @@ import { TutorialManager } from './tutorial/tutorialManager.js';
 import { PlacementOverlay } from './ui/placementOverlay.js';
 import { HierarchySlider } from './ui/hierarchySlider.js';
 import { ExplodeGauge } from './ui/explodeGauge.js';
+import { SelectionPulse } from './ui/selectionPulse.js';
 import { TrashZone } from './ui/trashZone.js';
 import { buildAssemblyTree, pieceMeshes, pieceOf } from './scene/assemblyTree.js';
 
@@ -81,6 +82,7 @@ let modeManager: ModeManager;
 let tutorial: TutorialManager;
 let placementOverlay: PlacementOverlay;
 let explodeGauge: ExplodeGauge;
+let selectionPulse: SelectionPulse;
 let trashZone: TrashZone;
 /** Previous animation-loop timestamp, to advance the fades. */
 let lastFrameTime: number | null = null;
@@ -206,6 +208,8 @@ function init(): void {
 
     explodeGauge = new ExplodeGauge(HOLD_DELAY_MS);
     explodeGauge.attach(document.body);
+    selectionPulse = new SelectionPulse();
+    selectionPulse.attach(document.body);
     trashZone = new TrashZone();
     trashZone.attach(document.body);
 
@@ -289,7 +293,10 @@ function init(): void {
         },
     });
 
-    const pickMesh = (inputSource?: XRInputSource) => pickHelper.pickXR(inputSource, renderer, scene, perf);
+    const pickMesh = (inputSource?: XRInputSource) => {
+        lastTapPoint = tapPointOf(inputSource);
+        return pickHelper.pickXR(inputSource, renderer, scene, perf);
+    };
 
     sceneMode = new SceneMode({
         view,
@@ -758,6 +765,19 @@ function syncState(): void {
     modeManager.setMode(selecting ? 'selection' : 'scene');
 }
 
+/** Where the last pick happened, in CSS pixels, for the selection pulse. */
+let lastTapPoint: { x: number; y: number } | null = null;
+
+/** CSS-pixel point of an XR screen tap (its axes run -1..1, Y down). */
+function tapPointOf(inputSource?: XRInputSource): { x: number; y: number } | null {
+    const axes = inputSource?.gamepad?.axes;
+    if (inputSource?.targetRayMode !== 'screen' || !axes || axes.length < 2) return null;
+    return {
+        x: (axes[0] * 0.5 + 0.5) * window.innerWidth,
+        y: (axes[1] * 0.5 + 0.5) * window.innerHeight,
+    };
+}
+
 /** The piece the last tap dropped from the selection, for a double tap on it. */
 let justDeselected: THREE.Mesh[] = [];
 
@@ -777,6 +797,7 @@ function togglePiece(mesh: THREE.Mesh | null): void {
         pickHelper.handleMeshSelection(mesh);
         if (isNewSelection) {
             hierarchySlider.setHierarchy(pickHelper.getSelectableAncestorChain(mesh));
+            if (lastTapPoint) selectionPulse.play(lastTapPoint.x, lastTapPoint.y);
         }
         tutorialEvents.emit({ kind: 'part-picked' });
     } else {

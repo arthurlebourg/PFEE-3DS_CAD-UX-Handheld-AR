@@ -12,9 +12,9 @@ const PICK_LAYER = 1;
 
 /**
  * Opacity of a model's other pieces while the granularity slider is up, from
- * its first step: almost invisible, just enough to keep the outline in context.
+ * its first step: faded but still readable, so the model stays in context.
  */
-const DIM_OPACITY = 0.06;
+const DIM_OPACITY = 0.3;
 
 /** A material's state before dimming, restored as is. */
 type DimBackup = { transparent: boolean; opacity: number; depthWrite: boolean };
@@ -453,9 +453,9 @@ export class PickHelper {
     }
 
     /**
-     * Near invisible without depth writes, so the opaque selection stays
-     * visible through the pieces in front of it; no shadow either, which an
-     * all but invisible piece would otherwise still cast.
+     * Faded without depth writes, so the opaque selection stays visible
+     * through the pieces in front of it; no shadow either, which a faded
+     * piece would otherwise still cast.
      */
     private dimMesh(mesh: THREE.Mesh): void {
         isolateMaterial(mesh);
