@@ -389,7 +389,7 @@ function init(): void {
 
         renderer.xr.addEventListener('sessionstart', () => {
             // Its "STOP AR" sits bottom centre, where the toolbar goes; the
-            // Quitter icon in the top-left corner replaces it in session.
+            // Quit icon in the top-left corner replaces it in session.
             button.style.visibility = 'hidden';
             uiManager.toggleVisibility(true);
             spatialMappingOverlay.start();
@@ -677,7 +677,7 @@ function placeModel(): void {
     shadowSystem.registerModel(model, shadowSurfacePose(model));
 
     historyManager.push({
-        description: 'Placer modèle',
+        description: 'Place model',
         undo: () => {
             removeModel(model);
         },
@@ -734,7 +734,7 @@ function deleteModel(model: THREE.Object3D): void {
     tutorialEvents.emit({ kind: 'model-deleted' });
 
     historyManager.push({
-        description: 'Supprimer modèle',
+        description: 'Delete model',
         undo: () => {
             restoreModel(model, index);
         },
@@ -963,7 +963,7 @@ function endMove(x: number, y: number): void {
 
     tutorialEvents.emit({ kind: 'model-moved' });
     historyManager.push({
-        description: 'Déplacer modèle',
+        description: 'Move model',
         undo: () => {
             setModelPlacement(model, startPhysical, startSurface);
         },
@@ -974,7 +974,7 @@ function endMove(x: number, y: number): void {
 }
 
 // -----------------------------------------------------------------------------
-// Réinitialiser: the whole scene back to zero, as one undoable step
+// Reset: the whole scene back to zero, as one undoable step
 // -----------------------------------------------------------------------------
 
 /**
@@ -1049,7 +1049,7 @@ function doResetScene(): void {
     reanchorModelsToSurface();
 }
 
-/** Réinitialiser: {@link doResetScene}, as one undoable step. */
+/** Reset: {@link doResetScene}, as one undoable step. */
 function resetScene(): void {
     const previousRigScale = rigScale;
     const previousSceneTransform = sceneRotator.getTransform();
@@ -1060,7 +1060,7 @@ function resetScene(): void {
     doResetScene();
 
     historyManager.push({
-        description: 'Réinitialiser',
+        description: 'Reset scene',
         undo: () => {
             restoreModelPoses(previousModelPoses);
             sceneRotator.setTransform(previousSceneTransform, xrRig);

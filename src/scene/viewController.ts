@@ -98,7 +98,7 @@ export class ViewController {
         if (!scaled && !rotated) return;
 
         this.deps.onAction({
-            description: 'Échelle / orientation scène',
+            description: 'Scene scale / orientation',
             undo: () => {
                 this.setPerceivedScale(startScale);
                 if (startTransform) this.deps.setSceneTransform(startTransform);

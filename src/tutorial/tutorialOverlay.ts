@@ -4,14 +4,14 @@ import type { TutorialStep } from './tutorialSteps.js';
 import { injectTutorialStyles } from './tutorialStyles.js';
 
 export interface TutorialOverlayCallbacks {
-    /** "Commencer" on the welcome card. */
+    /** "Start" on the welcome card. */
     onStart: () => void;
-    /** "Plus tard" / "Quitter": leave the tour without finishing it. */
+    /** "Later" / "Quit": leave the tour without finishing it. */
     onQuit: () => void;
     onSkipStep: () => void;
-    /** "Tout réinitialiser" on the finish card. */
+    /** "Reset everything" on the finish card. */
     onResetScene: () => void;
-    /** "Terminer" on the finish card. */
+    /** "Done" on the finish card. */
     onClose: () => void;
 }
 
@@ -91,13 +91,13 @@ export class TutorialOverlay {
         this.setSpotlight(null, false);
 
         this.renderModal({
-            kicker: 'Prise en main',
-            title: `${stepCount} gestes, une minute`,
-            body: "Un guide pas à pas vous fait essayer chaque geste directement sur la scène. Vous pouvez le quitter à tout moment, et le relancer via le bouton ? en haut à gauche.",
+            kicker: 'Getting started',
+            title: `${String(stepCount)} gestures, one minute`,
+            body: 'A step-by-step guide has you try each gesture right on the scene. You can quit it at any time, and replay it from the ? button in the top-left corner.',
             glyph: 'ui-tap',
             actions: [
-                { label: 'Plus tard', primary: false, action: () => this.callbacks.onQuit() },
-                { label: 'Commencer', primary: true, action: () => this.callbacks.onStart() },
+                { label: 'Later', primary: false, action: () => this.callbacks.onQuit() },
+                { label: 'Start', primary: true, action: () => this.callbacks.onStart() },
             ],
         });
     }
@@ -107,17 +107,17 @@ export class TutorialOverlay {
         this.setSpotlight('help', false);
 
         this.renderModal({
-            kicker: 'Terminé',
-            title: 'Vous avez tous les gestes en main',
-            body: "Le bouton ? en haut à gauche les rappelle à tout moment. La scène a été modifiée pendant le guide : vous pouvez la remettre à zéro.",
+            kicker: 'Done',
+            title: 'You know all the gestures',
+            body: 'The ? button in the top-left corner lists them at any time. The guide changed the scene: you can reset it.',
             glyph: 'check',
             actions: [
                 {
-                    label: 'Tout réinitialiser',
+                    label: 'Reset everything',
                     primary: false,
                     action: () => this.callbacks.onResetScene(),
                 },
-                { label: 'Terminer', primary: true, action: () => this.callbacks.onClose() },
+                { label: 'Done', primary: true, action: () => this.callbacks.onClose() },
             ],
         });
     }
@@ -133,7 +133,7 @@ export class TutorialOverlay {
         this.modal.classList.remove('visible');
 
         this.glyphBox.innerHTML = glyphSvg(step.glyph);
-        this.kicker.textContent = `Étape ${String(index + 1)} / ${String(total)}`;
+        this.kicker.textContent = `Step ${String(index + 1)} / ${String(total)}`;
         this.title.textContent = step.title;
         this.body.textContent = step.body;
         this.setNote(null);
@@ -146,7 +146,7 @@ export class TutorialOverlay {
 
     /** Reveals the step's hint and the per-step skip escape. */
     public showHint(hint: string): void {
-        this.setNote(`Astuce : ${hint}`, 'hint');
+        this.setNote(`Tip: ${hint}`, 'hint');
         this.btnSkipStep.classList.add('visible');
     }
 
@@ -217,9 +217,9 @@ export class TutorialOverlay {
         head.append(this.glyphBox, text);
 
         this.btnSkipStep.className = 'ar-tut-btn ghost ar-tut-skip';
-        this.btnSkipStep.textContent = "Passer l'étape";
+        this.btnSkipStep.textContent = 'Skip step';
         this.btnQuit.className = 'ar-tut-btn ghost';
-        this.btnQuit.textContent = 'Quitter';
+        this.btnQuit.textContent = 'Quit';
         this.onPointerDown(this.btnSkipStep, () => this.callbacks.onSkipStep());
         this.onPointerDown(this.btnQuit, () => this.callbacks.onQuit());
 

@@ -163,7 +163,7 @@ export class TutorialManager {
         }, delayMs);
     }
 
-    /** "Plus tard" / "Quitter": the ? button remains, so this must not nag. */
+    /** "Later" / "Quit": the ? button remains, so this must not nag. */
     private dismiss(): void {
         this.teardown();
         this.rememberTutorialSeen();

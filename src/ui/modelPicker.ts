@@ -40,7 +40,7 @@ interface DragState {
 }
 
 /**
- * ModelPicker: the modal grid behind the "Modèles" button.
+ * ModelPicker: the modal grid behind the "Models" button.
  *
  * Each card shows a snapshot of its model. Snapshots are rendered in the
  * background from launch and stored across launches (see preloadThumbnails),
@@ -287,7 +287,7 @@ export class ModelPicker {
 
         const badge = document.createElement('span');
         badge.className = 'ar-mp-badge';
-        badge.textContent = 'Actuel';
+        badge.textContent = 'Current';
         badge.setAttribute('aria-hidden', 'true');
 
         card.append(media, name, badge);

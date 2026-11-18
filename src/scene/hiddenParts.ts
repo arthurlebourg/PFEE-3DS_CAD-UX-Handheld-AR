@@ -3,7 +3,7 @@ import { isolateMaterial } from './picking.js';
 import type { HistoryAction } from '../history/historyManager.js';
 
 export interface HiddenPartsDeps {
-    /** Called whenever the set of hidden pieces changes (drives "Tout afficher"). */
+    /** Called whenever the set of hidden pieces changes (drives "Show all"). */
     onChange(count: number): void;
     /** Pushes an undoable action to the history. */
     onAction(action: HistoryAction): void;
@@ -59,7 +59,7 @@ export class HiddenParts {
         this.deps.onChange(this.hidden.length);
 
         this.deps.onAction({
-            description: 'Masquer pièce',
+            description: 'Hide part',
             undo: () => {
                 this.show(added);
             },
@@ -69,7 +69,7 @@ export class HiddenParts {
         });
     }
 
-    /** Reveals every hidden piece ("Tout afficher"), optionally as an undoable step. */
+    /** Reveals every hidden piece ("Show all"), optionally as an undoable step. */
     public showAll(recordAction = false): void {
         if (this.hidden.length === 0) return;
 
@@ -78,7 +78,7 @@ export class HiddenParts {
 
         if (recordAction) {
             this.deps.onAction({
-                description: 'Afficher toutes les pièces',
+                description: 'Show all parts',
                 undo: () => {
                     this.rehide(previouslyHidden);
                 },

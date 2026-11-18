@@ -99,7 +99,7 @@ export class ExplodeController {
         if (!changed) return;
 
         this.deps.onAction({
-            description: 'Éclatement',
+            description: 'Explode',
             undo: () => {
                 for (const [model, factor] of start) this.setFactor(model, factor);
             },

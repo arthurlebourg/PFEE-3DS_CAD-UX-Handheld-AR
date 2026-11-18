@@ -38,12 +38,12 @@ export type UITarget = 'models' | 'reset' | 'toolbar' | 'help';
  *
  * What shows follows the interaction state, never a mode button:
  *   - Scene (nothing selected): the quick column, bottom right, with
- *     Réinitialiser (the whole scene) and Modèles (the model picker).
- *   - Selection: the toolbar, bottom centre, with Inverser and Fermer; the
+ *     Reset (the whole scene) and Models (the model picker).
+ *   - Selection: the toolbar, bottom centre, with Invert and Close; the
  *     quick column hides to free the view.
- *   - "Tout afficher (n)" joins the toolbar in both states while pieces are
+ *   - "Show all (n)" joins the toolbar in both states while pieces are
  *     hidden: a hidden piece can no longer be tapped to bring it back.
- * Always there: Quitter and help (top left), Undo / Redo (top right).
+ * Always there: Quit and help (top left), Undo / Redo (top right).
  * Dev mode adds a gear radial menu with the debug buttons (picking colours,
  * perf stats); in prod the gear is omitted entirely.
  *
@@ -115,7 +115,7 @@ export class UIManager {
             this.quickItem(this.btnModel, 'Models'),
         );
 
-        // Quitter and help share the top-left corner, away from the toolbar.
+        // Quit and help share the top-left corner, away from the toolbar.
         this.btnExit.className = 'ar-exit-btn';
         this.btnExit.innerHTML = `<i data-lucide="log-out"></i>`;
         this.btnExit.setAttribute('aria-label', 'Quit application');
@@ -146,9 +146,9 @@ export class UIManager {
 
         this.btnHelp.className = 'ar-help-btn';
         this.btnHelp.innerHTML = `<i data-lucide="circle-question-mark"></i>`;
-        this.btnHelp.setAttribute('aria-label', 'Aide : gestes');
+        this.btnHelp.setAttribute('aria-label', 'Help: gestures');
 
-        // Toolbar: selection actions, plus "Tout afficher" while pieces are hidden
+        // Toolbar: selection actions, plus "Show all" while pieces are hidden
         this.toolbar.className = 'ar-toolbar';
         this.toolbar.setAttribute('role', 'toolbar');
 
@@ -171,13 +171,13 @@ export class UIManager {
 
         this.btnUndo.className = 'ar-history-btn btn-undo disabled';
         this.btnUndo.innerHTML = `<i data-lucide="undo"></i>`;
-        this.btnUndo.title = 'Annuler (Undo)';
-        this.btnUndo.setAttribute('aria-label', 'Annuler');
+        this.btnUndo.title = 'Undo';
+        this.btnUndo.setAttribute('aria-label', 'Undo');
 
         this.btnRedo.className = 'ar-history-btn btn-redo disabled';
         this.btnRedo.innerHTML = `<i data-lucide="redo"></i>`;
-        this.btnRedo.title = 'Rétablir (Redo)';
-        this.btnRedo.setAttribute('aria-label', 'Rétablir');
+        this.btnRedo.title = 'Redo';
+        this.btnRedo.setAttribute('aria-label', 'Redo');
 
         this.historyContainer.append(this.btnUndo, this.btnRedo);
 
@@ -186,8 +186,8 @@ export class UIManager {
         this.btnGear.className = 'ar-menu-btn ar-btn-gear';
         this.btnGear.innerHTML = `<i data-lucide="settings"></i>`;
         if (isDevMode) {
-            this.btnDebug = this.createRadialButton('btn-debug', 'eye',      'Couleurs: OFF');
-            this.btnPerf  = this.createRadialButton('btn-perf',  'activity', 'Statistiques: OFF');
+            this.btnDebug = this.createRadialButton('btn-debug', 'eye',      'Colors: OFF');
+            this.btnPerf  = this.createRadialButton('btn-perf',  'activity', 'Stats: OFF');
         }
 
         // Model picker modal
@@ -288,7 +288,7 @@ export class UIManager {
         this.updateUI();
     }
 
-    /** Number of hidden pieces: shows "Tout afficher (n)" while it is not 0. */
+    /** Number of hidden pieces: shows "Show all (n)" while it is not 0. */
     public setHiddenCount(count: number): void {
         this.hiddenCount = count;
         this.updateUI();
@@ -440,10 +440,10 @@ export class UIManager {
             const debugLabel = this.btnDebug.querySelector('.ar-radial-label')!;
             if (this.showPickingColors) {
                 this.btnDebug.className = 'ar-menu-btn ar-radial-btn btn-debug active-red';
-                debugLabel.textContent = 'Couleurs: ON';
+                debugLabel.textContent = 'Colors: ON';
             } else {
                 this.btnDebug.className = 'ar-menu-btn ar-radial-btn btn-debug';
-                debugLabel.textContent = 'Couleurs: OFF';
+                debugLabel.textContent = 'Colors: OFF';
             }
         }
 
@@ -452,10 +452,10 @@ export class UIManager {
             const perfLabel = this.btnPerf.querySelector('.ar-radial-label')!;
             if (this.showPerf) {
                 this.btnPerf.className = 'ar-menu-btn ar-radial-btn btn-perf active-red';
-                perfLabel.textContent = 'Statistiques: ON';
+                perfLabel.textContent = 'Stats: ON';
             } else {
                 this.btnPerf.className = 'ar-menu-btn ar-radial-btn btn-perf';
-                perfLabel.textContent = 'Statistiques: OFF';
+                perfLabel.textContent = 'Stats: OFF';
             }
         }
     }
@@ -558,7 +558,7 @@ export class UIManager {
             }
 
             .ar-exit-btn { left: max(20px, env(safe-area-inset-left, 20px)); }
-            /* Help sits next to Quitter; in dev mode (no Quitter) it takes the corner. */
+            /* Help sits next to Quit; in dev mode (no Quit) it takes the corner. */
             .ar-help-btn { left: max(20px, env(safe-area-inset-left, 20px)); }
             .ar-exit-btn.visible ~ .ar-help-btn { left: calc(max(20px, env(safe-area-inset-left, 20px)) + 56px); }
 

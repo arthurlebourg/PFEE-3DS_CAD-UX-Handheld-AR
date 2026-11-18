@@ -52,7 +52,7 @@ export class HierarchySlider {
         this.root.tabIndex = 0;
         this.root.setAttribute('role', 'slider');
         this.root.setAttribute('aria-orientation', 'vertical');
-        this.root.setAttribute('aria-label', 'Granularité de la sélection');
+        this.root.setAttribute('aria-label', 'Selection granularity');
         this.root.setAttribute('aria-valuemin', '0');
 
         this.rail.className = 'ar-hs-rail';
@@ -211,8 +211,8 @@ export class HierarchySlider {
 
         const step = this.steps[this.levelIndex];
         const text = this.steps.length < 2
-            ? 'Pas de sous-ensembles dans ce modèle'
-            : `Niveau ${this.levelIndex + 1} sur ${this.steps.length}, ${step.pieces} pièce${step.pieces > 1 ? 's' : ''}`;
+            ? 'No subassemblies in this model'
+            : `Level ${String(this.levelIndex + 1)} of ${String(this.steps.length)}, ${String(step.pieces)} part${step.pieces > 1 ? 's' : ''}`;
         this.root.setAttribute('aria-valuenow', String(this.levelIndex));
         this.root.setAttribute('aria-valuetext', text);
     }

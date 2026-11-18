@@ -60,7 +60,7 @@ export class PlacementOverlay {
         // DOM distance warning
         this.distanceWarningEl = document.createElement('div');
         this.distanceWarningEl.className = 'ar-distance-warning';
-        this.distanceWarningEl.textContent = 'Trop loin — rapprochez-vous';
+        this.distanceWarningEl.textContent = 'Too far — move closer';
         this.distanceWarningEl.style.display = 'none';
 
         this.injectStyles();

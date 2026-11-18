@@ -18,7 +18,7 @@ export class TrashZone {
         this.injectStyles();
         this.root.className = 'ar-trash';
         this.root.setAttribute('aria-hidden', 'true');
-        this.root.innerHTML = `<i data-lucide="trash-2"></i><span>Supprimer</span>`;
+        this.root.innerHTML = `<i data-lucide="trash-2"></i><span>Delete</span>`;
     }
 
     public attach(parent: HTMLElement): void {

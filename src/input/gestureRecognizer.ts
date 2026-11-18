@@ -90,7 +90,7 @@ export class GestureRecognizer {
 
     public attach(parent: HTMLElement): void {
         // Capture phase, so this runs before any UI handler: buttons act on
-        // pointerdown and may hide their own menu (the tutorial's "Commencer"
+        // pointerdown and may hide their own menu (the tutorial's "Start"
         // does), and once it is gone neither touchstart nor the browser's
         // beforexrselect hit test can tell the touch began on UI.
         parent.addEventListener('pointerdown', (event) => {
