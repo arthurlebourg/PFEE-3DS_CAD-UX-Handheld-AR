@@ -11,8 +11,8 @@ const HINT_DELAY_MS = 7000;
 /** Time without a surface before the coaching animation comes back, so hit-test flicker doesn't blink it. */
 const COACHING_RETURN_MS = 1500;
 
-const MSG_MOVE = 'Déplacez lentement l\'appareil';
-const MSG_HINT = 'Pointez vers le sol ou une table bien éclairée';
+const MSG_MOVE = 'Move the device slowly';
+const MSG_HINT = 'Point at the floor or a well-lit table';
 
 /**
  * SpatialMappingOverlay: lightweight coaching shown over the camera feed until a

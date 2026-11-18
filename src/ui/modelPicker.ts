@@ -114,15 +114,15 @@ export class ModelPicker {
         const title = document.createElement('h2');
         title.className = 'ar-mp-title';
         title.id = 'ar-mp-title';
-        title.textContent = 'Modèles';
+        title.textContent = 'Models';
         const count = document.createElement('span');
         count.className = 'ar-mp-count';
-        count.textContent = `${models.length} modèle${models.length > 1 ? 's' : ''}`;
+        count.textContent = `${models.length} model${models.length > 1 ? 's' : ''}`;
         heading.append(title, count);
         this.btnClose.type = 'button';
         this.btnClose.className = 'ar-mp-close';
         this.btnClose.textContent = '✕';
-        this.btnClose.setAttribute('aria-label', 'Fermer');
+        this.btnClose.setAttribute('aria-label', 'Close');
         this.head.append(this.grip, heading, this.btnClose);
 
         this.grid.className = 'ar-mp-grid';

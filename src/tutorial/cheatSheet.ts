@@ -5,17 +5,17 @@ import { injectTutorialStyles } from './tutorialStyles.js';
 
 interface CheatItem {
     glyph: GlyphName;
-    gesture: string;
-    effect: string;
+    title: string;
+    description: string;
 }
 
 /** Gestures that work everywhere, then those of each interaction state. */
 type SectionName = 'view' | ModeName;
 
 const SECTION_LABELS: Record<SectionName, string> = {
-    view: 'Partout',
-    scene: 'Sans sélection',
-    selection: 'Avec une sélection',
+    view: 'Everywhere',
+    scene: 'No selection',
+    selection: 'With selection',
 };
 
 /**
@@ -26,55 +26,84 @@ const SECTION_LABELS: Record<SectionName, string> = {
 const CHEATSHEET: Record<SectionName, CheatItem[]> = {
     view: [
         {
-            glyph: 'pinch',
-            gesture: 'Pincer à deux doigts',
-            effect: "Ajuster l'échelle perçue de la scène, de 10 % à 1000 %.",
+            glyph: 'twist',
+            title: 'Rotation',
+            description: 'Twist two fingers to rotate the scene around the vertical axis.',
         },
         {
-            glyph: 'twist',
-            gesture: 'Tourner à deux doigts',
-            effect: 'Faire pivoter la scène autour de la verticale.',
+            glyph: 'pinch',
+            title: 'Zoom / Scale',
+            description: 'Pinch or spread two fingers to adjust the scene size (10% to 1000%).',
         },
         {
             glyph: 'tilt',
-            gesture: 'Glisser deux doigts vers le haut ou le bas',
-            effect: 'Incliner la scène, jusqu’à 90°.',
+            title: 'Tilt',
+            description: 'Drag two fingers up or down to tilt the scene.',
+        },
+        {
+            glyph: 'ui-tap',
+            title: 'Undo / Redo',
+            description: 'Tap the arrows in the top-right to undo or redo an action.',
         },
     ],
     scene: [
         {
             glyph: 'tap',
-            gesture: 'Toucher',
-            effect: 'Poser le modèle choisi, ou sélectionner une pièce.',
+            title: 'Place model',
+            description: 'Aim at a detected flat surface and tap the screen to place the model.',
+        },
+        {
+            glyph: 'tap',
+            title: 'Select a part',
+            description: 'Tap a part of the model to enter selection mode and show its tools.',
         },
         {
             glyph: 'drag',
-            gesture: 'Glisser un doigt sur un modèle',
-            effect: 'Le déplacer sur la surface. Le lâcher sur la corbeille le supprime.',
+            title: 'Move or delete',
+            description: 'Drag a finger on a model to move it on the surface. Release over the trash to delete it.',
         },
         {
             glyph: 'ui-tap',
-            gesture: 'Réinitialiser',
-            effect: 'Remettre toute la scène à zéro : vue, modèles, pièces.',
+            title: 'Choose a model',
+            description: 'Tap the "Models" button to open the 3D catalog.',
+        },
+        {
+            glyph: 'ui-tap',
+            title: 'Reset',
+            description: 'Tap the "Reset" button to reset the whole scene.',
         },
     ],
     selection: [
         {
-            glyph: 'tap',
-            gesture: 'Toucher',
-            effect: 'Ajouter ou retirer une pièce. Toucher le vide désélectionne tout.',
+            glyph: 'hold-up',
+            title: 'Exploded view',
+            description: 'Hold for ½ s, then drag up to separate parts, down to reassemble them.',
+        },
+        {
+            glyph: 'double-tap',
+            title: 'Hide a part',
+            description: 'Double-tap a part to temporarily hide it and see inside.',
+        },
+        {
+            glyph: 'ui-tap',
+            title: 'Show all parts',
+            description: 'Tap "Show all" in the toolbar to reveal all hidden parts.',
         },
         {
             glyph: 'slide-y',
-            gesture: 'Glisser sur le rail gauche',
-            effect: 'Élargir la sélection à l’ensemble qui contient la pièce.',
+            title: 'Expand selection',
+            description: 'Drag on the left vertical rail to expand selection to the subassembly or model.',
         },
         {
-            glyph: 'hold-up',
-            gesture: 'Maintenir ½ s, puis glisser',
-            effect: 'Vers le haut : éclater le modèle. Vers le bas : le rassembler.',
+            glyph: 'tap',
+            title: 'Edit selection',
+            description: 'Tap a part to add or remove it. Tap empty space to deselect all.',
         },
-        { glyph: 'double-tap', gesture: 'Double-toucher', effect: 'Masquer la pièce visée.' },
+        {
+            glyph: 'ui-tap',
+            title: 'Invert selection',
+            description: 'Tap "Invert" in the toolbar to invert the selection.',
+        },
     ],
 };
 
@@ -140,7 +169,7 @@ export class CheatSheet {
 
         this.card.innerHTML = `
             <div class="ar-cs-head">
-                <div class="ar-cs-title">Gestes</div>
+                <div class="ar-cs-title">Help & Gestures</div>
             </div>
             ${ordered.map((name) => this.renderSection(name)).join('')}
         `;
@@ -148,13 +177,13 @@ export class CheatSheet {
         const close = document.createElement('button');
         close.className = 'ar-cs-close';
         close.textContent = '✕';
-        close.setAttribute('aria-label', 'Fermer');
+        close.setAttribute('aria-label', 'Close');
         this.onPointerDown(close, () => this.close());
         this.card.querySelector('.ar-cs-head')?.appendChild(close);
 
         const replay = document.createElement('button');
         replay.className = 'ar-tut-btn primary';
-        replay.textContent = 'Revoir le guide';
+        replay.textContent = 'Replay guide';
         this.onPointerDown(replay, () => {
             this.close();
             this.onReplay();
@@ -173,8 +202,8 @@ export class CheatSheet {
                 <div class="ar-cs-row">
                     <div class="ar-cs-glyph">${glyphSvg(item.glyph)}</div>
                     <div>
-                        <div class="ar-cs-gesture">${item.gesture}</div>
-                        <div class="ar-cs-effect">${item.effect}</div>
+                        <div class="ar-cs-item-title">${item.title}</div>
+                        <div class="ar-cs-item-desc">${item.description}</div>
                     </div>
                 </div>`,
             )

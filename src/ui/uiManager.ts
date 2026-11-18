@@ -58,6 +58,7 @@ export class UIManager {
     private btnModel = document.createElement('button');
     private btnHelp = document.createElement('button');
     private btnExit = document.createElement('button');
+    private exitModal = document.createElement('div');
     private readonly modelPicker: ModelPicker;
 
     // Bottom-centre toolbar
@@ -101,23 +102,47 @@ export class UIManager {
 
         this.btnReset.className = 'ar-quick-btn btn-reset';
         this.btnReset.innerHTML = `<i data-lucide="rotate-ccw"></i>`;
-        this.btnReset.setAttribute('aria-label', 'Réinitialiser la scène');
+        this.btnReset.setAttribute('aria-label', 'Reset scene');
 
         this.btnModel.className = 'ar-quick-btn btn-model';
         this.btnModel.innerHTML = `<i data-lucide="layers"></i>`;
-        this.btnModel.setAttribute('aria-label', 'Choisir un modèle');
+        this.btnModel.setAttribute('aria-label', 'Choose a model');
         this.btnModel.setAttribute('aria-haspopup', 'dialog');
         this.btnModel.setAttribute('aria-expanded', 'false');
 
         this.quickContainer.append(
-            this.quickItem(this.btnReset, 'Réinitialiser'),
-            this.quickItem(this.btnModel, 'Modèles'),
+            this.quickItem(this.btnReset, 'Reset'),
+            this.quickItem(this.btnModel, 'Models'),
         );
 
         // Quitter and help share the top-left corner, away from the toolbar.
         this.btnExit.className = 'ar-exit-btn';
         this.btnExit.innerHTML = `<i data-lucide="log-out"></i>`;
-        this.btnExit.setAttribute('aria-label', 'Quitter la réalité augmentée');
+        this.btnExit.setAttribute('aria-label', 'Quit application');
+
+        this.exitModal.className = 'ar-exit-modal';
+        this.exitModal.innerHTML = `
+            <div class="ar-exit-dialog">
+                <div class="ar-exit-message">Are you sure you want to quit the application?</div>
+                <div class="ar-exit-actions">
+                    <button class="ar-exit-btn-action btn-cancel">No</button>
+                    <button class="ar-exit-btn-action btn-confirm">Yes</button>
+                </div>
+            </div>
+        `;
+        const btnCancel = this.exitModal.querySelector('.btn-cancel') as HTMLElement;
+        const btnConfirm = this.exitModal.querySelector('.btn-confirm') as HTMLElement;
+        this.addPointerDownListener(btnCancel, () => this.hideExitModal());
+        this.addPointerDownListener(btnConfirm, () => {
+            this.hideExitModal();
+            this.callbacks.onExit();
+        });
+        this.exitModal.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            if (e.target === this.exitModal) {
+                this.hideExitModal();
+            }
+        });
 
         this.btnHelp.className = 'ar-help-btn';
         this.btnHelp.innerHTML = `<i data-lucide="circle-question-mark"></i>`;
@@ -128,16 +153,16 @@ export class UIManager {
         this.toolbar.setAttribute('role', 'toolbar');
 
         this.btnInvert.className = 'ar-tool-btn btn-invert';
-        this.btnInvert.innerHTML = `<i data-lucide="flip-horizontal"></i><span>Inverser</span>`;
-        this.btnInvert.setAttribute('aria-label', 'Inverser la sélection');
+        this.btnInvert.innerHTML = `<i data-lucide="flip-horizontal"></i><span>Invert</span>`;
+        this.btnInvert.setAttribute('aria-label', 'Invert selection');
 
         this.btnShowAll.className = 'ar-tool-btn btn-show-all';
         this.btnShowAll.innerHTML = `<i data-lucide="eye"></i>`;
         this.btnShowAll.appendChild(this.showAllLabel);
 
         this.btnClose.className = 'ar-tool-btn btn-close';
-        this.btnClose.innerHTML = `<i data-lucide="x"></i><span>Fermer</span>`;
-        this.btnClose.setAttribute('aria-label', 'Fermer la sélection');
+        this.btnClose.innerHTML = `<i data-lucide="x"></i><span>Close</span>`;
+        this.btnClose.setAttribute('aria-label', 'Close selection');
 
         this.toolbar.append(this.btnInvert, this.btnShowAll, this.btnClose);
 
@@ -193,7 +218,7 @@ export class UIManager {
         this.addPointerDownListener(this.btnInvert,  () => this.callbacks.onInvertSelection());
         this.addPointerDownListener(this.btnShowAll, () => this.callbacks.onShowAll());
         this.addPointerDownListener(this.btnClose,   () => this.callbacks.onCloseSelection());
-        this.addPointerDownListener(this.btnExit,    () => this.callbacks.onExit());
+        this.addPointerDownListener(this.btnExit,    () => this.showExitModal());
         this.addPointerDownListener(this.btnUndo,    () => {
             if (!this.btnUndo.classList.contains('disabled')) {
                 this.callbacks.onUndo();
@@ -211,7 +236,7 @@ export class UIManager {
         // Prevent XR select events from bubbling through the overlay
         for (const element of [
             this.quickContainer, this.container, this.toolbar, this.historyContainer,
-            this.btnHelp, this.btnExit,
+            this.btnHelp, this.btnExit, this.exitModal,
         ]) {
             element.addEventListener('beforexrselect', (e) => e.preventDefault());
         }
@@ -237,8 +262,17 @@ export class UIManager {
         parent.appendChild(this.historyContainer);
         parent.appendChild(this.btnExit);
         parent.appendChild(this.btnHelp);
+        parent.appendChild(this.exitModal);
 
         this.hydrateIcons();
+    }
+
+    public showExitModal(): void {
+        this.exitModal.classList.add('visible');
+    }
+
+    public hideExitModal(): void {
+        this.exitModal.classList.remove('visible');
     }
 
     // -------------------------------------------------------------------------
@@ -391,10 +425,10 @@ export class UIManager {
         this.btnInvert.classList.toggle('shown', selecting);
         this.btnClose.classList.toggle('shown', selecting);
         this.btnShowAll.classList.toggle('shown', this.hiddenCount > 0);
-        this.showAllLabel.textContent = `Tout afficher (${String(this.hiddenCount)})`;
+        this.showAllLabel.textContent = `Show all (${String(this.hiddenCount)})`;
         this.btnShowAll.setAttribute(
             'aria-label',
-            `Tout afficher : ${String(this.hiddenCount)} pièce(s) masquée(s)`,
+            `Show all: ${String(this.hiddenCount)} hidden part(s)`,
         );
         this.toolbar.classList.toggle(
             'visible',
@@ -741,6 +775,73 @@ export class UIManager {
                 pointer-events: none;
                 box-shadow: none;
                 border-color: rgba(255, 255, 255, 0.1);
+            }
+
+            .ar-exit-modal {
+                position: fixed;
+                inset: 0;
+                display: none;
+                align-items: center;
+                justify-content: center;
+                background: rgba(0, 0, 0, 0.65);
+                backdrop-filter: blur(4px);
+                -webkit-backdrop-filter: blur(4px);
+                z-index: 2500;
+                pointer-events: auto;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                padding: 20px;
+            }
+
+            .ar-exit-modal.visible { display: flex; }
+
+            .ar-exit-dialog {
+                width: 100%;
+                max-width: 320px;
+                padding: 22px 20px;
+                border-radius: 20px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                background: rgba(15, 15, 20, 0.95);
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+                color: #fff;
+                text-align: center;
+            }
+
+            .ar-exit-message {
+                font-size: 15px;
+                font-weight: 600;
+                line-height: 1.4;
+                margin-bottom: 20px;
+            }
+
+            .ar-exit-actions {
+                display: flex;
+                gap: 12px;
+                justify-content: center;
+            }
+
+            .ar-exit-btn-action {
+                flex: 1;
+                min-height: 40px;
+                padding: 8px 16px;
+                border-radius: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                font-family: inherit;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                outline: none;
+                transition: transform 0.1s ease;
+            }
+
+            .ar-exit-btn-action:active { transform: scale(0.94); }
+            .ar-exit-btn-action.btn-cancel {
+                background: rgba(255, 255, 255, 0.12);
+                color: #fff;
+            }
+            .ar-exit-btn-action.btn-confirm {
+                background: #dc3545;
+                border-color: #dc3545;
+                color: #fff;
             }
         `;
         document.head.appendChild(style);
