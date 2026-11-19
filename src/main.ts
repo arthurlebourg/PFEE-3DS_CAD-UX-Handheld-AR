@@ -14,7 +14,9 @@ import { GestureRecognizer, HOLD_DELAY_MS } from './input/gestureRecognizer.js';
 import { ModeManager } from './modes/modeManager.js';
 import { SceneMode } from './modes/sceneMode.js';
 import { SelectionMode } from './modes/selectionMode.js';
+import { MeasureMode } from './modes/measureMode.js';
 import { ViewController } from './scene/viewController.js';
+import { MeasureTool } from './scene/measureTool.js';
 import { ExplodeController, MAX_EXPLODE_FACTOR } from './scene/explodeController.js';
 import { HiddenParts } from './scene/hiddenParts.js';
 import { SpatialMappingOverlay } from './ui/spatialMappingOverlay.js';
@@ -25,6 +27,7 @@ import { PlacementOverlay } from './ui/placementOverlay.js';
 import { HierarchySlider } from './ui/hierarchySlider.js';
 import { ExplodeGauge } from './ui/explodeGauge.js';
 import { TrashZone } from './ui/trashZone.js';
+import { MeasureOverlay } from './ui/measureOverlay.js';
 import { buildAssemblyTree, pieceMeshes, pieceOf } from './scene/assemblyTree.js';
 
 const modules = import.meta.glob('../assets/*.glb', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
@@ -82,6 +85,7 @@ let tutorial: TutorialManager;
 let placementOverlay: PlacementOverlay;
 let explodeGauge: ExplodeGauge;
 let trashZone: TrashZone;
+let measureOverlay: MeasureOverlay;
 /** Previous animation-loop timestamp, to advance the fades. */
 let lastFrameTime: number | null = null;
 
@@ -93,6 +97,8 @@ let lastFrameTime: number | null = null;
 const tutorialEvents = new TutorialEventBus();
 let sceneMode: SceneMode;
 let selectionMode: SelectionMode;
+let measureMode: MeasureMode;
+let measureTool: MeasureTool;
 let view: ViewController;
 let explodeController: ExplodeController;
 let hiddenParts: HiddenParts;
@@ -189,6 +195,13 @@ function init(): void {
             onInvertSelection: () => invertSelection(),
             onShowAll: () => hiddenParts.showAll(true),
             onCloseSelection: () => clearSelection(),
+            onMeasure: () => modeManager.setMode('measure'),
+            onMeasureAddPoint: () => {
+                if (measureTool.addPoint()) {
+                    navigator.vibrate?.(10);
+                }
+            },
+            onMeasureDone: () => modeManager.setMode('scene'),
             onExit: () => void renderer.xr.getSession()?.end(),
             onUndo: () => historyManager.undo(),
             onRedo: () => historyManager.redo(),
@@ -208,6 +221,17 @@ function init(): void {
     explodeGauge.attach(document.body);
     trashZone = new TrashZone();
     trashZone.attach(document.body);
+    measureOverlay = new MeasureOverlay();
+    measureOverlay.attach(document.body);
+
+    measureTool = new MeasureTool(xrRig, {
+        probeModel: () => modelPointAtCenter(),
+        sceneToReal: (point) => sceneToReal(point),
+        onAction: (action) => {
+            historyManager.push(action);
+        },
+    });
+    measureTool.attach(document.body);
 
     // The tour waits for mapping: its first step places a model, which needs a
     // surface, and its cards would otherwise stack under the scan overlay.
@@ -352,7 +376,20 @@ function init(): void {
         },
     });
 
-    modeManager = new ModeManager(sceneMode, selectionMode, (mode) => {
+    measureMode = new MeasureMode({
+        view,
+        onEnter: () => {
+            measureTool.setActive(true);
+            measureOverlay.setVisible(true);
+        },
+        onExit: () => {
+            measureTool.setActive(false);
+            measureOverlay.setVisible(false);
+            uiManager.setMeasureCanAdd(false);
+        },
+    });
+
+    modeManager = new ModeManager(sceneMode, selectionMode, measureMode, (mode) => {
         uiManager.setMode(mode);
         if (mode === 'selection' && previewModel) {
             previewModel.visible = false;
@@ -394,6 +431,7 @@ function init(): void {
             uiManager.toggleVisibility(true);
             spatialMappingOverlay.start();
             placementOverlay.setVisible(true);
+            measureTool.setVisible(true);
         });
         renderer.xr.addEventListener('sessionend', () => {
             button.style.visibility = '';
@@ -403,7 +441,9 @@ function init(): void {
             spatialMappingOverlay.hide();
             placementOverlay.setVisible(false);
             explodeGauge.hide();
+            measureTool.setVisible(false);
             clearSelection();
+            modeManager.setMode('scene');
         });
     }
 
@@ -748,12 +788,17 @@ function deleteModel(model: THREE.Object3D): void {
 // Selection: the state follows it
 // -----------------------------------------------------------------------------
 
-/** Scene when nothing is selected, Selection otherwise. */
+/**
+ * Scene when nothing is selected, Selection otherwise. Measure survives an
+ * empty selection (undoing a placement lands here too); only a selection
+ * ends it.
+ */
 function syncState(): void {
     const selecting = pickHelper.selectedMeshes.length > 0;
     if (!selecting) {
         hierarchySlider.hide();
         pickHelper.clearContextDimming();
+        if (modeManager.currentName === 'measure') return;
     }
     modeManager.setMode(selecting ? 'selection' : 'scene');
 }
@@ -880,12 +925,16 @@ function supportPlane(model: THREE.Object3D): THREE.Plane {
     return new THREE.Plane().setFromNormalAndCoplanarPoint(normal, point);
 }
 
+/** The camera the screen shows: the AR view in session, the orbit camera in dev mode. */
+function viewCamera(): THREE.Camera {
+    const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : null;
+    return xrCamera?.cameras[0] ?? camera;
+}
+
 /** Where the ray under a screen point (CSS pixels) meets a scene-space plane. */
 function planePointAt(x: number, y: number, plane: THREE.Plane): THREE.Vector3 | null {
-    const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : null;
-    const viewCamera = xrCamera?.cameras[0] ?? camera;
     const ndc = new THREE.Vector2((x / window.innerWidth) * 2 - 1, 1 - (y / window.innerHeight) * 2);
-    raycaster.setFromCamera(ndc, viewCamera);
+    raycaster.setFromCamera(ndc, viewCamera());
     return raycaster.ray.intersectPlane(plane, new THREE.Vector3());
 }
 
@@ -896,6 +945,50 @@ function sceneToReal(point: THREE.Vector3): THREE.Vector3 {
 }
 
 let movePlane: THREE.Plane | null = null;
+
+// -----------------------------------------------------------------------------
+// Measuring: what the crosshair at the screen centre is on
+// -----------------------------------------------------------------------------
+
+const SCREEN_CENTER = new THREE.Vector2(0, 0);
+/** Dev mode has no hit-test: its grid at y = 0 stands in for the real surface. */
+const DEV_FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+/** False if the object or one of its ancestors is hidden (e.g. a hidden piece). */
+function isShown(object: THREE.Object3D): boolean {
+    for (let curr: THREE.Object3D | null = object; curr; curr = curr.parent) {
+        if (!curr.visible) return false;
+    }
+    return true;
+}
+
+/**
+ * Scene point on the visible model piece under the screen centre, if any.
+ * In session, GPU picking names the front-most piece cheaply and the ray only
+ * has to find the exact point on it. Dev mode has no XR camera to pick with,
+ * and a desktop can afford raycasting every model.
+ */
+function modelPointAtCenter(): THREE.Vector3 | null {
+    const presenting = renderer.xr.isPresenting;
+    let targets: THREE.Object3D[];
+    if (presenting) {
+        const mesh = pickHelper.pickAt(0, 0, renderer, scene, perf);
+        if (!mesh) return null;
+        targets = [mesh];
+    } else {
+        targets = allModels();
+    }
+
+    raycaster.setFromCamera(SCREEN_CENTER, viewCamera());
+    const hit = raycaster.intersectObjects(targets, !presenting).find((h) => isShown(h.object));
+    return hit ? hit.point.clone() : null;
+}
+
+/** Real-world surface point under the screen centre in dev mode (the grid). */
+function devSurfaceAtCenter(): THREE.Vector3 | null {
+    const point = planePointAt(window.innerWidth / 2, window.innerHeight / 2, DEV_FLOOR);
+    return point ? sceneToReal(point) : null;
+}
 
 function beginMove(model: THREE.Object3D, x: number, y: number): void {
     const pose = model.userData as PhysicalPose;
@@ -1047,6 +1140,7 @@ function doResetScene(): void {
     updateRigScale(1.0);
     view.resetScaleState();
     reanchorModelsToSurface();
+    measureTool.clear();
 }
 
 /** Reset: {@link doResetScene}, as one undoable step. */
@@ -1056,12 +1150,14 @@ function resetScene(): void {
     const previousModelPoses = snapshotModelPoses();
     const previousFactors = new Map(allModels().map((model) => [model, explodeController.getFactor(model)]));
     const previouslyHidden = [...hiddenParts.meshes];
+    const previousRuler = measureTool.getPoints();
 
     doResetScene();
 
     historyManager.push({
         description: 'Reset scene',
         undo: () => {
+            measureTool.setPoints(previousRuler);
             restoreModelPoses(previousModelPoses);
             sceneRotator.setTransform(previousSceneTransform, xrRig);
             view.setPerceivedScale(1 / previousRigScale);
@@ -1160,6 +1256,13 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
         spatialMappingOverlay.updateDev(camera);
     }
 
+    const measuring = modeManager.currentName === 'measure';
+    /** Real surface under the crosshair, once mapping has stabilized (Measure only). */
+    let measureSurface: THREE.Vector3 | null = null;
+    if (measuring && isDevMode && spatialMappingOverlay.isComplete) {
+        measureSurface = devSurfaceAtCenter();
+    }
+
     if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
@@ -1192,6 +1295,11 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
 
             if (debugHitAxes) {
                 showDebugHitPose(pose);
+            }
+
+            // The hit-test ray is cast from the viewer, through the crosshair.
+            if (measuring && pose && spatialMappingOverlay.isComplete) {
+                measureSurface = posePosition.clone();
             }
 
             const placementArmed =
@@ -1240,6 +1348,13 @@ function animate(_timestamp: DOMHighResTimeStamp, frame?: XRFrame): void {
     // (rotation, scale, undo), cheaply, for the handful of placed models.
     for (const model of placedModels) {
         shadowSystem.updateSurface(model, shadowSurfacePose(model));
+    }
+
+    measureTool.setSurface(measureSurface);
+    measureTool.update(viewCamera());
+    if (measuring) {
+        measureOverlay.update(measureTool.target, measureTool.nextEnd);
+        uiManager.setMeasureCanAdd(measureTool.target !== null);
     }
 
     if (uiManager.showPickingColors) {

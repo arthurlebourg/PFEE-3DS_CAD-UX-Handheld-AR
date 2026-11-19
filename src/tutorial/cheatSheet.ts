@@ -16,6 +16,7 @@ const SECTION_LABELS: Record<SectionName, string> = {
     view: 'Everywhere',
     scene: 'No selection',
     selection: 'With selection',
+    measure: 'Measuring',
 };
 
 /**
@@ -105,6 +106,33 @@ const CHEATSHEET: Record<SectionName, CheatItem[]> = {
             description: 'Tap "Invert" in the toolbar to invert the selection.',
         },
     ],
+    measure: [
+        {
+            glyph: 'ui-tap',
+            title: 'Measure',
+            description: 'With nothing selected, tap "Measure" to show a crosshair at the centre of the screen.',
+        },
+        {
+            glyph: 'ui-tap',
+            title: 'Place the ends',
+            description: 'Aim the crosshair at a part or a surface and tap + for each end. The length shows in the middle.',
+        },
+        {
+            glyph: 'ui-tap',
+            title: 'New ruler',
+            description: 'Tap + again to start a new ruler; it replaces the previous one.',
+        },
+        {
+            glyph: 'ui-tap',
+            title: 'Remove',
+            description: 'Undo removes the last end placed. Reset removes the ruler.',
+        },
+        {
+            glyph: 'ui-tap',
+            title: 'Done',
+            description: 'Tap "Done" to go back. The ruler stays where it is in the room.',
+        },
+    ],
 };
 
 /**
@@ -163,9 +191,11 @@ export class CheatSheet {
     }
 
     private render(mode: ModeName): void {
-        const ordered: SectionName[] = mode === 'scene'
-            ? ['view', 'scene', 'selection']
-            : ['view', 'selection', 'scene'];
+        const ordered: SectionName[] = mode === 'measure'
+            ? ['view', 'measure', 'scene', 'selection']
+            : mode === 'scene'
+                ? ['view', 'scene', 'selection', 'measure']
+                : ['view', 'selection', 'scene', 'measure'];
 
         this.card.innerHTML = `
             <div class="ar-cs-head">
