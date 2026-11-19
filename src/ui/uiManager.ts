@@ -1,4 +1,4 @@
-import { createIcons, Settings, Layers, Eye, Activity, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark, X, LogOut } from 'lucide';
+import { createIcons, Settings, Layers, Eye, Activity, RotateCcw, FlipHorizontal, Undo, Redo, CircleQuestionMark, X, LogOut, Ruler, Plus, Check } from 'lucide';
 import type { ModeName } from '../modes/interactionMode.js';
 import { ModelPicker } from './modelPicker.js';
 
@@ -13,6 +13,12 @@ export interface UIManagerCallbacks {
     onShowAll: () => void;
     /** Clears the selection, back to the Scene state. */
     onCloseSelection: () => void;
+    /** Enters the Measure state. */
+    onMeasure: () => void;
+    /** Places the ruler's next end under the crosshair. */
+    onMeasureAddPoint: () => void;
+    /** Leaves the Measure state, back to Scene. */
+    onMeasureDone: () => void;
     /** Leaves the AR session. */
     onExit: () => void;
     /** Undo the last action. */
@@ -38,9 +44,11 @@ export type UITarget = 'models' | 'reset' | 'toolbar' | 'help';
  *
  * What shows follows the interaction state, never a mode button:
  *   - Scene (nothing selected): the quick column, bottom right, with
- *     Reset (the whole scene) and Models (the model picker).
+ *     Measure, Reset (the whole scene) and Models (the model picker).
  *   - Selection: the toolbar, bottom centre, with Invert and Close; the
  *     quick column hides to free the view.
+ *   - Measure: the toolbar with + (place the next ruler end, disabled while
+ *     the crosshair is on nothing) and Done; the quick column hides.
  *   - "Show all (n)" joins the toolbar in both states while pieces are
  *     hidden: a hidden piece can no longer be tapped to bring it back.
  * Always there: Quit and help (top left), Undo / Redo (top right).
@@ -54,6 +62,7 @@ export class UIManager {
     public showPerf = false;
 
     private quickContainer = document.createElement('div');
+    private btnMeasure = document.createElement('button');
     private btnReset = document.createElement('button');
     private btnModel = document.createElement('button');
     private btnHelp = document.createElement('button');
@@ -67,6 +76,8 @@ export class UIManager {
     private btnShowAll = document.createElement('button');
     private showAllLabel = document.createElement('span');
     private btnClose = document.createElement('button');
+    private btnAddPoint = document.createElement('button');
+    private btnDone = document.createElement('button');
 
     // History buttons (Undo / Redo)
     private historyContainer = document.createElement('div');
@@ -100,6 +111,10 @@ export class UIManager {
         this.quickContainer.className =
             'ar-quick-container' + (isDevMode ? ' with-gear' : '');
 
+        this.btnMeasure.className = 'ar-quick-btn btn-measure';
+        this.btnMeasure.innerHTML = `<i data-lucide="ruler"></i>`;
+        this.btnMeasure.setAttribute('aria-label', 'Measure');
+
         this.btnReset.className = 'ar-quick-btn btn-reset';
         this.btnReset.innerHTML = `<i data-lucide="rotate-ccw"></i>`;
         this.btnReset.setAttribute('aria-label', 'Reset scene');
@@ -111,6 +126,7 @@ export class UIManager {
         this.btnModel.setAttribute('aria-expanded', 'false');
 
         this.quickContainer.append(
+            this.quickItem(this.btnMeasure, 'Measure'),
             this.quickItem(this.btnReset, 'Reset'),
             this.quickItem(this.btnModel, 'Models'),
         );
@@ -164,7 +180,18 @@ export class UIManager {
         this.btnClose.innerHTML = `<i data-lucide="x"></i><span>Close</span>`;
         this.btnClose.setAttribute('aria-label', 'Close selection');
 
-        this.toolbar.append(this.btnInvert, this.btnShowAll, this.btnClose);
+        this.btnAddPoint.className = 'ar-tool-btn btn-add-point disabled';
+        this.btnAddPoint.innerHTML = `<i data-lucide="plus"></i><span>Add point</span>`;
+        this.btnAddPoint.setAttribute('aria-label', 'Place a ruler end at the crosshair');
+        this.btnAddPoint.setAttribute('aria-disabled', 'true');
+
+        this.btnDone.className = 'ar-tool-btn btn-done';
+        this.btnDone.innerHTML = `<i data-lucide="check"></i><span>Done</span>`;
+        this.btnDone.setAttribute('aria-label', 'Stop measuring');
+
+        this.toolbar.append(
+            this.btnAddPoint, this.btnInvert, this.btnShowAll, this.btnClose, this.btnDone,
+        );
 
         // History buttons (Undo / Redo)
         this.historyContainer.className = 'ar-history-container';
@@ -218,6 +245,13 @@ export class UIManager {
         this.addPointerDownListener(this.btnInvert,  () => this.callbacks.onInvertSelection());
         this.addPointerDownListener(this.btnShowAll, () => this.callbacks.onShowAll());
         this.addPointerDownListener(this.btnClose,   () => this.callbacks.onCloseSelection());
+        this.addPointerDownListener(this.btnMeasure, () => this.callbacks.onMeasure());
+        this.addPointerDownListener(this.btnAddPoint, () => {
+            if (!this.btnAddPoint.classList.contains('disabled')) {
+                this.callbacks.onMeasureAddPoint();
+            }
+        });
+        this.addPointerDownListener(this.btnDone,    () => this.callbacks.onMeasureDone());
         this.addPointerDownListener(this.btnExit,    () => this.showExitModal());
         this.addPointerDownListener(this.btnUndo,    () => {
             if (!this.btnUndo.classList.contains('disabled')) {
@@ -282,10 +316,17 @@ export class UIManager {
     /** Reflects the active interaction state (called by the ModeManager's onChange). */
     public setMode(mode: ModeName): void {
         this.mode = mode;
-        if (mode === 'selection') {
+        if (mode !== 'scene') {
             this.modelPicker.close();
         }
         this.updateUI();
+    }
+
+    /** Enables + while the crosshair is on something; safe to call every frame. */
+    public setMeasureCanAdd(enabled: boolean): void {
+        if (this.btnAddPoint.classList.contains('disabled') !== enabled) return;
+        this.btnAddPoint.classList.toggle('disabled', !enabled);
+        this.btnAddPoint.setAttribute('aria-disabled', String(!enabled));
     }
 
     /** Number of hidden pieces: shows "Show all (n)" while it is not 0. */
@@ -354,7 +395,7 @@ export class UIManager {
         createIcons({
             icons: {
                 Settings, Layers, Eye, Activity, RotateCcw, FlipHorizontal,
-                Undo, Redo, CircleQuestionMark, X, LogOut,
+                Undo, Redo, CircleQuestionMark, X, LogOut, Ruler, Plus, Check,
             }
         });
     }
@@ -414,9 +455,10 @@ export class UIManager {
 
     private updateUI(): void {
         const selecting = this.mode === 'selection';
+        const measuring = this.mode === 'measure';
         const active = this.sessionActive;
 
-        this.quickContainer.classList.toggle('visible', active && !selecting);
+        this.quickContainer.classList.toggle('visible', active && this.mode === 'scene');
         this.historyContainer.classList.toggle('visible', active);
         this.btnHelp.classList.toggle('visible', active);
         this.btnExit.classList.toggle('visible', active && !this.isDevMode);
@@ -424,6 +466,8 @@ export class UIManager {
 
         this.btnInvert.classList.toggle('shown', selecting);
         this.btnClose.classList.toggle('shown', selecting);
+        this.btnAddPoint.classList.toggle('shown', measuring);
+        this.btnDone.classList.toggle('shown', measuring);
         this.btnShowAll.classList.toggle('shown', this.hiddenCount > 0);
         this.showAllLabel.textContent = `Show all (${String(this.hiddenCount)})`;
         this.btnShowAll.setAttribute(
@@ -432,7 +476,7 @@ export class UIManager {
         );
         this.toolbar.classList.toggle(
             'visible',
-            active && !this.moving && (selecting || this.hiddenCount > 0),
+            active && !this.moving && (selecting || measuring || this.hiddenCount > 0),
         );
 
         // Debug button (dev only)
@@ -620,6 +664,9 @@ export class UIManager {
             .ar-tool-btn:active { background: rgba(255, 255, 255, 0.15); }
             .ar-tool-btn svg { width: 22px; height: 22px; stroke: currentColor; }
             .ar-tool-btn.btn-invert { color: #ffa500; }
+            .ar-tool-btn.btn-add-point { color: #00e676; }
+            .ar-tool-btn.btn-add-point svg { width: 28px; height: 28px; }
+            .ar-tool-btn.disabled { opacity: 0.35; pointer-events: none; }
 
             .ar-menu-container {
                 position: absolute;

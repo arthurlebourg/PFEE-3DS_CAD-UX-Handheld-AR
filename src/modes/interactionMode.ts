@@ -6,9 +6,11 @@
  * any more: the state follows the selection. Scene (nothing selected): place,
  * move and delete models. Selection (pieces selected): hide, explode, widen.
  * Two-finger view gestures (zoom / rotate / tilt) mean the same in both.
+ * Measure is the one state the user picks (Measure button, from Scene): a
+ * crosshair places a ruler's ends.
  * Handlers are optional: a state simply ignores the gestures it does not use.
  */
-export type ModeName = 'scene' | 'selection';
+export type ModeName = 'scene' | 'selection' | 'measure';
 
 export interface PinchState {
     /** currentDistance / startDistance — multiplicative factor, for scaling. */

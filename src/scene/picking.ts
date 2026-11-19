@@ -241,6 +241,9 @@ export class PickHelper {
 
         const backup = this.swapToPickMaterials();
         const pixelBuffer = new Uint8Array(4);
+        // Inside the animation loop the XR layer is already bound as the
+        // target; it must be put back for the frame to reach the screen.
+        const previousTarget = renderer.getRenderTarget();
 
         try {
             renderer.setRenderTarget(this.pickingTexture);
@@ -255,7 +258,7 @@ export class PickHelper {
         } finally {
             this.restoreMaterials(backup);
             this.pickingTexture.scissorTest = false;
-            renderer.setRenderTarget(null);
+            renderer.setRenderTarget(previousTarget);
             renderer.xr.enabled = xrWasEnabled;
             renderer.toneMapping = oldToneMapping;
         }
